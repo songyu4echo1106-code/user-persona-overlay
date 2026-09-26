@@ -8,11 +8,9 @@ import { getContext, renderExtensionTemplateAsync } from '../../../extensions.js
 import {
     eventSource,
     event_types,
-    saveMetadataDebounced,
     setExtensionPrompt,
     extension_prompt_types,
     extension_prompt_roles,
-    chat_metadata as scriptChatMetadata,
 } from '../../../../script.js';
 
 const TEMPLATE_NAMESPACE = 'third-party/user-persona-overlay';
@@ -96,12 +94,23 @@ function getMetadataStore() {
             return context.chatMetadata;
         }
     } catch (error) {
-        console.warn(LOG_PREFIX, 'getContext().chatMetadata 不可用，尝试回退到 script.js 的 chat_metadata。', error);
-    }
-    if (scriptChatMetadata && typeof scriptChatMetadata === 'object') {
-        return scriptChatMetadata;
+        console.warn(LOG_PREFIX, 'getContext().chatMetadata 读取失败。', error);
     }
     return null;
+}
+
+function persistMetadata() {
+    try {
+        const context = getContext();
+        const save = context?.saveMetadataDebounced ?? context?.saveMetadata;
+        if (typeof save === 'function') {
+            save.call(context);
+        } else {
+            console.warn(LOG_PREFIX, '当前版本没有 saveMetadataDebounced / saveMetadata，数据仅保留在内存。');
+        }
+    } catch (error) {
+        console.warn(LOG_PREFIX, '保存 chatMetadata 失败。', error);
+    }
 }
 
 function getOverlayData() {
@@ -128,7 +137,7 @@ function saveOverlayData(patch) {
         return;
     }
     store[METADATA_KEY] = { ...getOverlayData(), ...patch, version: DATA_VERSION };
-    saveMetadataDebounced();
+    persistMetadata();
 }
 
 /* ---------------- 注入层：仅 setExtensionPrompt 内存注入，不落盘 ---------------- */
