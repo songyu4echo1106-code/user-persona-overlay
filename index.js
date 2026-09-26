@@ -33,10 +33,14 @@ const DEFAULT_DATA = Object.freeze({
     role: extension_prompt_roles.SYSTEM,
 });
 
-// ST 1.19 原生 Persona 位置枚举（personas.js，与 extension_prompt_types 是两套枚举，仅列出支持镜像的值）
+// ST 原生 Persona 位置枚举（power-user.js persona_description_positions，与 extension_prompt_types 是两套枚举）
 const PERSONA_POSITIONS = Object.freeze({
     IN_PROMPT: 0,
-    IN_CHAT: 1,
+    AFTER_CHAR: 1, // 已废弃，ST 会迁移为 IN_PROMPT；不做镜像，安全回退
+    TOP_AN: 2,
+    BOTTOM_AN: 3,
+    AT_DEPTH: 4,
+    NONE: 9,
 });
 
 let textFieldsSaver = null;
@@ -164,8 +168,11 @@ function buildInjectionText(data) {
 }
 
 /**
- * 防御式只读 ST 1.19 原生 Persona 配置（power_user.persona_descriptions）。
- * 绝不写入；任何异常或结构不符都返回 null，由调用方回退。
+ * 防御式只读 ST 原生 Persona 当前生效配置（power_user 全局值，绝不写入）。
+ * 生成时实际注入使用的就是这组全局值（选择/编辑 Persona 时会由 per-persona
+ * descriptor 同步过来），因此读全局值比读 persona_descriptions 更贴近真实行为，
+ * 也不依赖 userAvatar 暴露或 descriptor 是否存在。任何异常或结构不符都返回 null，
+ * 由调用方回退。
  */
 function getNativePersonaConfig() {
     try {
@@ -174,26 +181,21 @@ function getNativePersonaConfig() {
         if (!powerUser || typeof powerUser !== 'object') {
             return null;
         }
-        const avatarId = context?.userAvatar ?? powerUser.user_avatar ?? null;
-        const descriptions = powerUser.persona_descriptions;
-        const descriptor = avatarId && descriptions && typeof descriptions === 'object' ? descriptions[avatarId] : null;
-        if (!descriptor || typeof descriptor !== 'object') {
-            return null;
-        }
-        const position = Number(descriptor.position);
+        const position = Number(powerUser.persona_description_position);
         let mappedPosition;
         if (position === PERSONA_POSITIONS.IN_PROMPT) {
             mappedPosition = extension_prompt_types.IN_PROMPT;
-        } else if (position === PERSONA_POSITIONS.IN_CHAT) {
+        } else if (position === PERSONA_POSITIONS.AT_DEPTH) {
             mappedPosition = extension_prompt_types.IN_CHAT;
         } else {
-            // NONE / TOP_AN / BOTTOM_AN / 未知值：不支持镜像，回退手动配置
+            // AFTER_CHAR(1，已废弃) / TOP_AN(2) / BOTTOM_AN(3) / NONE(9) / 未知值：
+            // setExtensionPrompt 无法完整镜像（如 AN 合并、关闭注入），安全回退手动配置
             return null;
         }
         return {
             position: mappedPosition,
-            depth: normalizeDepth(descriptor.depth),
-            role: normalizeRole(descriptor.role),
+            depth: normalizeDepth(powerUser.persona_description_depth),
+            role: normalizeRole(powerUser.persona_description_role),
         };
     } catch (error) {
         console.warn(LOG_PREFIX, '读取原生 Persona 配置失败。', error);
@@ -219,7 +221,7 @@ function resolveInjectionPlan(data) {
         }
         return {
             followed: false,
-            fallbackReason: '跟随原生 Persona 不可用（Persona 不存在、读取失败或位置不支持镜像），已回退到手动配置。',
+            fallbackReason: '跟随原生 Persona 不可用（读取失败，或当前位置为 AFTER_CHAR/TOP_AN/BOTTOM_AN/NONE 等无法镜像的类型），已回退到手动配置。',
             position: data.position,
             depth: data.depth,
             role: data.role,
