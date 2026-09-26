@@ -16,6 +16,7 @@ import {
 const TEMPLATE_NAMESPACE = 'third-party/user-persona-overlay';
 const METADATA_KEY = 'user_persona_overlay';
 const PROMPT_KEY = 'user_persona_overlay';
+const LIBRARY_STORAGE_KEY = 'user_persona_overlay_library';
 const LOG_PREFIX = '[User Persona Overlay]';
 const DATA_VERSION = 1;
 const TEXT_DEBOUNCE_MS = 300;
@@ -25,7 +26,7 @@ const MAX_DEPTH = 999;
 const DEFAULT_DATA = Object.freeze({
     version: DATA_VERSION,
     enabled: false,
-    followPersona: false,
+    followPersona: true, // Follow 现在是唯一注入模式；手动 position/depth/role 仅作回退
     nickname: '',
     content: '',
     position: extension_prompt_types.IN_PROMPT,
@@ -134,7 +135,8 @@ function getOverlayData() {
     return {
         version: DATA_VERSION,
         enabled: Boolean(raw.enabled),
-        followPersona: Boolean(raw.followPersona),
+        // 历史数据中的 false 自动升级为 true；旧的手动 position/depth/role 仍兼容读取，仅用于回退。
+        followPersona: true,
         nickname: typeof raw.nickname === 'string' ? raw.nickname : '',
         content: typeof raw.content === 'string' ? raw.content : '',
         position: normalizePosition(raw.position),
@@ -263,6 +265,140 @@ function refreshInjection() {
     return { text, plan };
 }
 
+/* ------------ Persona 存档层：localStorage，独立于聊天数据，不直接参与生成 ------------ */
+
+function notifyLibrary(message, type = 'info') {
+    const toast = globalThis.toastr?.[type];
+    if (typeof toast === 'function') {
+        toast(message);
+    } else {
+        console.log(LOG_PREFIX, message);
+    }
+}
+
+function createLibraryId() {
+    return globalThis.crypto?.randomUUID?.()
+        ?? `p_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function loadLibrary() {
+    try {
+        const raw = localStorage.getItem(LIBRARY_STORAGE_KEY);
+        if (!raw) {
+            return [];
+        }
+        const list = JSON.parse(raw);
+        if (!Array.isArray(list)) {
+            return [];
+        }
+        return list
+            .filter(item => item && typeof item === 'object' && typeof item.id === 'string' && typeof item.content === 'string')
+            .map(item => ({
+                id: item.id,
+                name: typeof item.name === 'string' ? item.name : '',
+                nickname: typeof item.nickname === 'string' ? item.nickname : '',
+                content: item.content,
+                createdAt: Number(item.createdAt) || Date.now(),
+                updatedAt: Number(item.updatedAt) || Date.now(),
+            }));
+    } catch (error) {
+        console.warn(LOG_PREFIX, '读取 Persona 存档失败。', error);
+        return [];
+    }
+}
+
+function saveLibrary(list) {
+    try {
+        localStorage.setItem(LIBRARY_STORAGE_KEY, JSON.stringify(list));
+        return true;
+    } catch (error) {
+        console.warn(LOG_PREFIX, '写入 Persona 存档失败。', error);
+        notifyLibrary('Persona 存档写入失败（localStorage 不可用或已满）。', 'error');
+        return false;
+    }
+}
+
+function saveCurrentToLibrary() {
+    const data = getOverlayData();
+    if (!data.content.trim()) {
+        notifyLibrary('当前补充 Persona 内容为空，未创建存档。', 'warning');
+        return;
+    }
+    const name = String($('#upo_lib_name').val() ?? '').trim();
+    if (!name) {
+        notifyLibrary('请先填写存档名称。', 'warning');
+        return;
+    }
+    const list = loadLibrary();
+    const now = Date.now();
+    list.push({
+        id: createLibraryId(),
+        name,
+        nickname: data.nickname.trim(),
+        content: data.content,
+        createdAt: now,
+        updatedAt: now,
+    });
+    if (!saveLibrary(list)) {
+        return;
+    }
+    $('#upo_lib_name').val('');
+    renderLibrary();
+    notifyLibrary(`已保存 Persona 存档「${name}」。`, 'success');
+}
+
+function applyLibraryPersona(id) {
+    const item = loadLibrary().find(entry => entry.id === id);
+    if (!item) {
+        notifyLibrary('未找到该存档，可能已被删除。', 'warning');
+        renderLibrary();
+        return;
+    }
+    // 丢弃尚在防抖窗口内的输入，避免随后用旧字段值覆盖刚应用的内容。
+    textFieldsSaver?.cancel?.();
+    saveOverlayData({ nickname: item.nickname, content: item.content });
+    $('#upo_nickname').val(item.nickname);
+    $('#upo_content').val(item.content);
+    refreshInjection();
+    updatePreview();
+    notifyLibrary(`已应用 Persona 存档「${item.name}」到当前聊天。`, 'success');
+}
+
+function deleteLibraryPersona(id) {
+    const item = loadLibrary().find(entry => entry.id === id);
+    if (!item) {
+        renderLibrary();
+        return;
+    }
+    if (!confirm(`删除 Persona 存档「${item.name}」？只会删除存档，不影响任何聊天。`)) {
+        return;
+    }
+    saveLibrary(loadLibrary().filter(entry => entry.id !== id));
+    renderLibrary();
+}
+
+function renderLibrary() {
+    const list = loadLibrary();
+    const container = $('#upo_lib_list');
+    container.empty();
+    if (!list.length) {
+        container.append($('<div class="upo-library-empty upo-hint"></div>').text('（暂无存档）'));
+        return;
+    }
+    for (const item of list) {
+        const name = $('<div class="upo-library-item-name"></div>').text(item.name || '（未命名）');
+        if (item.nickname) {
+            name.append($('<small></small>').text(` · 昵称：${item.nickname}`));
+        }
+        const applyButton = $('<input type="button" class="menu_button" value="应用" />')
+            .on('click', () => applyLibraryPersona(item.id));
+        const deleteButton = $('<input type="button" class="menu_button" value="删除" />')
+            .on('click', () => deleteLibraryPersona(item.id));
+        const actions = $('<div class="upo-library-item-actions"></div>').append(applyButton, deleteButton);
+        container.append($('<div class="upo-library-item"></div>').append(name, actions));
+    }
+}
+
 /* ---------------- UI 层 ---------------- */
 
 function updateStatusLine() {
@@ -306,7 +442,7 @@ function updateStateBadge() {
     badge.attr('title', `位置：${positionNames[plan.position]}${depthPart} · 角色：${roleNames[plan.role]}`);
 }
 
-function updatePlanInfo(data, plan) {
+function updatePlanInfo(plan) {
     const positionNames = {
         [extension_prompt_types.IN_PROMPT]: 'IN_PROMPT（系统提示区）',
         [extension_prompt_types.IN_CHAT]: 'IN_CHAT（聊天内）',
@@ -318,14 +454,9 @@ function updatePlanInfo(data, plan) {
         [extension_prompt_roles.ASSISTANT]: 'Assistant',
     };
     const details = `实际位置：${positionNames[plan.position]} · 角色：${roleNames[plan.role]} · Depth：${plan.depth}`;
-    let text;
-    if (data.followPersona) {
-        text = plan.followed
-            ? `已跟随原生 Persona 位置（镜像） — ${details}`
-            : `跟随不可用，已回退到手动配置 — ${details}`;
-    } else {
-        text = `手动配置 — ${details}`;
-    }
+    const text = plan.followed
+        ? `已跟随原生 Persona 位置（镜像） — ${details}`
+        : `跟随不可用，已回退到手动配置 — ${details}`;
     $('#upo_plan_info').text(text);
 }
 
@@ -334,14 +465,8 @@ function updatePreview() {
     const plan = resolveInjectionPlan(data);
     const text = buildInjectionText(data);
     $('#upo_preview').val(text || '（当前不会注入任何内容：未启用或内容为空）');
-    updatePlanInfo(data, plan);
+    updatePlanInfo(plan);
     updateStateBadge();
-}
-
-function toggleDepthRow() {
-    const data = getOverlayData();
-    $('#upo_depth_row').toggle(!data.followPersona && data.position === extension_prompt_types.IN_CHAT);
-    $('#upo_role_row').toggle(!data.followPersona);
 }
 
 function loadOverlayIntoPanel() {
@@ -349,10 +474,6 @@ function loadOverlayIntoPanel() {
     $('#upo_enabled').prop('checked', data.enabled);
     $('#upo_nickname').val(data.nickname);
     $('#upo_content').val(data.content);
-    $('#upo_position').val(data.followPersona ? 'follow' : String(data.position));
-    $('#upo_depth').val(data.depth);
-    $('#upo_role').val(String(data.role));
-    toggleDepthRow();
     updateStatusLine();
     updatePreview();
 }
@@ -375,30 +496,7 @@ function bindPanel() {
 
     $('#upo_nickname, #upo_content').on('input', () => textFieldsSaver());
 
-    $('#upo_position').on('change', function () {
-        if (this.value === 'follow') {
-            saveOverlayData({ followPersona: true });
-        } else {
-            saveOverlayData({ followPersona: false, position: normalizePosition(this.value) });
-        }
-        toggleDepthRow();
-        refreshInjection();
-        updatePreview();
-    });
-
-    $('#upo_depth').on('change', function () {
-        const depth = normalizeDepth(this.value);
-        $(this).val(depth);
-        saveOverlayData({ depth });
-        refreshInjection();
-        updatePreview();
-    });
-
-    $('#upo_role').on('change', function () {
-        saveOverlayData({ role: normalizeRole(this.value) });
-        refreshInjection();
-        updatePreview();
-    });
+    $('#upo_lib_save').on('click', saveCurrentToLibrary);
 }
 
 /* ---------------- 事件 ---------------- */
@@ -444,6 +542,7 @@ jQuery(async () => {
         }
         container.append(html);
         bindPanel();
+        renderLibrary();
         loadOverlayIntoPanel();
         registerEvents();
         refreshInjection();
