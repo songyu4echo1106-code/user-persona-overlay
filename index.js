@@ -25,6 +25,7 @@ const MAX_DEPTH = 999;
 const DEFAULT_DATA = Object.freeze({
     version: DATA_VERSION,
     enabled: false,
+    followPersona: false,
     nickname: '',
     content: '',
     position: extension_prompt_types.IN_PROMPT,
@@ -32,7 +33,14 @@ const DEFAULT_DATA = Object.freeze({
     role: extension_prompt_roles.SYSTEM,
 });
 
+// ST 1.19 原生 Persona 位置枚举（personas.js，与 extension_prompt_types 是两套枚举，仅列出支持镜像的值）
+const PERSONA_POSITIONS = Object.freeze({
+    IN_PROMPT: 0,
+    IN_CHAT: 1,
+});
+
 let textFieldsSaver = null;
+let lastFollowWarnSignature = '';
 
 function normalizePosition(value) {
     const num = Number(value);
@@ -122,6 +130,7 @@ function getOverlayData() {
     return {
         version: DATA_VERSION,
         enabled: Boolean(raw.enabled),
+        followPersona: Boolean(raw.followPersona),
         nickname: typeof raw.nickname === 'string' ? raw.nickname : '',
         content: typeof raw.content === 'string' ? raw.content : '',
         position: normalizePosition(raw.position),
@@ -154,16 +163,102 @@ function buildInjectionText(data) {
     return `[Supplemental persona for ${name}]\n${content}`;
 }
 
+/**
+ * 防御式只读 ST 1.19 原生 Persona 配置（power_user.persona_descriptions）。
+ * 绝不写入；任何异常或结构不符都返回 null，由调用方回退。
+ */
+function getNativePersonaConfig() {
+    try {
+        const context = getContext();
+        const powerUser = context?.powerUserSettings;
+        if (!powerUser || typeof powerUser !== 'object') {
+            return null;
+        }
+        const avatarId = context?.userAvatar ?? powerUser.user_avatar ?? null;
+        const descriptions = powerUser.persona_descriptions;
+        const descriptor = avatarId && descriptions && typeof descriptions === 'object' ? descriptions[avatarId] : null;
+        if (!descriptor || typeof descriptor !== 'object') {
+            return null;
+        }
+        const position = Number(descriptor.position);
+        let mappedPosition;
+        if (position === PERSONA_POSITIONS.IN_PROMPT) {
+            mappedPosition = extension_prompt_types.IN_PROMPT;
+        } else if (position === PERSONA_POSITIONS.IN_CHAT) {
+            mappedPosition = extension_prompt_types.IN_CHAT;
+        } else {
+            // NONE / TOP_AN / BOTTOM_AN / 未知值：不支持镜像，回退手动配置
+            return null;
+        }
+        return {
+            position: mappedPosition,
+            depth: normalizeDepth(descriptor.depth),
+            role: normalizeRole(descriptor.role),
+        };
+    } catch (error) {
+        console.warn(LOG_PREFIX, '读取原生 Persona 配置失败。', error);
+        return null;
+    }
+}
+
+/**
+ * 计算最终实际采用的注入方案。
+ * follow 模式读取成功 → 镜像原生 Persona；失败 → 回退手动配置并给出原因。
+ */
+function resolveInjectionPlan(data) {
+    if (data.followPersona) {
+        const native = getNativePersonaConfig();
+        if (native) {
+            return {
+                followed: true,
+                fallbackReason: '',
+                position: native.position,
+                depth: native.depth,
+                role: native.role,
+            };
+        }
+        return {
+            followed: false,
+            fallbackReason: '跟随原生 Persona 不可用（Persona 不存在、读取失败或位置不支持镜像），已回退到手动配置。',
+            position: data.position,
+            depth: data.depth,
+            role: data.role,
+        };
+    }
+    return {
+        followed: false,
+        fallbackReason: '',
+        position: data.position,
+        depth: data.depth,
+        role: data.role,
+    };
+}
+
+function warnFollowFallback(plan) {
+    const signature = `${plan.position}|${plan.depth}|${plan.role}`;
+    if (signature === lastFollowWarnSignature) {
+        return;
+    }
+    lastFollowWarnSignature = signature;
+    console.warn(LOG_PREFIX, plan.fallbackReason);
+}
+
 function refreshInjection() {
     const data = getOverlayData();
+    const plan = resolveInjectionPlan(data);
+    if (plan.followed) {
+        lastFollowWarnSignature = '';
+    } else if (plan.fallbackReason) {
+        warnFollowFallback(plan);
+    }
     const text = buildInjectionText(data);
     if (text) {
-        setExtensionPrompt(PROMPT_KEY, text, data.position, data.depth, false, data.role);
+        setExtensionPrompt(PROMPT_KEY, text, plan.position, plan.depth, false, plan.role);
     } else {
         // 空内容 + 位置 NONE：本聊天不注入，也不残留上一个聊天的内容。
-        setExtensionPrompt(PROMPT_KEY, '', extension_prompt_types.NONE, data.depth, false, data.role);
+        setExtensionPrompt(PROMPT_KEY, '', extension_prompt_types.NONE, plan.depth, false, plan.role);
     }
-    return text;
+    return { text, plan };
 }
 
 /* ---------------- UI 层 ---------------- */
@@ -183,6 +278,7 @@ function updateStatusLine() {
 
 function updateStateBadge() {
     const data = getOverlayData();
+    const plan = resolveInjectionPlan(data);
     const badge = $('#upo_state');
     badge.attr('title', '');
     if (!data.enabled) {
@@ -203,21 +299,47 @@ function updateStateBadge() {
         [extension_prompt_roles.USER]: 'User',
         [extension_prompt_roles.ASSISTANT]: 'Assistant',
     };
-    const depthPart = data.position === extension_prompt_types.IN_CHAT ? `（depth ${data.depth}）` : '';
+    const depthPart = plan.position === extension_prompt_types.IN_CHAT ? `（depth ${plan.depth}）` : '';
     badge.text('注入中').removeClass('upo-state-off').addClass('upo-state-on');
-    badge.attr('title', `位置：${positionNames[data.position]}${depthPart} · 角色：${roleNames[data.role]}`);
+    badge.attr('title', `位置：${positionNames[plan.position]}${depthPart} · 角色：${roleNames[plan.role]}`);
+}
+
+function updatePlanInfo(data, plan) {
+    const positionNames = {
+        [extension_prompt_types.IN_PROMPT]: 'IN_PROMPT（系统提示区）',
+        [extension_prompt_types.IN_CHAT]: 'IN_CHAT（聊天内）',
+        [extension_prompt_types.BEFORE_PROMPT]: 'BEFORE_PROMPT（提示词最前）',
+    };
+    const roleNames = {
+        [extension_prompt_roles.SYSTEM]: 'System',
+        [extension_prompt_roles.USER]: 'User',
+        [extension_prompt_roles.ASSISTANT]: 'Assistant',
+    };
+    const details = `实际位置：${positionNames[plan.position]} · 角色：${roleNames[plan.role]} · Depth：${plan.depth}`;
+    let text;
+    if (data.followPersona) {
+        text = plan.followed
+            ? `已跟随原生 Persona 位置（镜像） — ${details}`
+            : `跟随不可用，已回退到手动配置 — ${details}`;
+    } else {
+        text = `手动配置 — ${details}`;
+    }
+    $('#upo_plan_info').text(text);
 }
 
 function updatePreview() {
     const data = getOverlayData();
+    const plan = resolveInjectionPlan(data);
     const text = buildInjectionText(data);
     $('#upo_preview').val(text || '（当前不会注入任何内容：未启用或内容为空）');
+    updatePlanInfo(data, plan);
     updateStateBadge();
 }
 
 function toggleDepthRow() {
-    const position = normalizePosition($('#upo_position').val());
-    $('#upo_depth_row').toggle(position === extension_prompt_types.IN_CHAT);
+    const data = getOverlayData();
+    $('#upo_depth_row').toggle(!data.followPersona && data.position === extension_prompt_types.IN_CHAT);
+    $('#upo_role_row').toggle(!data.followPersona);
 }
 
 function loadOverlayIntoPanel() {
@@ -225,7 +347,7 @@ function loadOverlayIntoPanel() {
     $('#upo_enabled').prop('checked', data.enabled);
     $('#upo_nickname').val(data.nickname);
     $('#upo_content').val(data.content);
-    $('#upo_position').val(String(data.position));
+    $('#upo_position').val(data.followPersona ? 'follow' : String(data.position));
     $('#upo_depth').val(data.depth);
     $('#upo_role').val(String(data.role));
     toggleDepthRow();
@@ -252,7 +374,11 @@ function bindPanel() {
     $('#upo_nickname, #upo_content').on('input', () => textFieldsSaver());
 
     $('#upo_position').on('change', function () {
-        saveOverlayData({ position: normalizePosition(this.value) });
+        if (this.value === 'follow') {
+            saveOverlayData({ followPersona: true });
+        } else {
+            saveOverlayData({ followPersona: false, position: normalizePosition(this.value) });
+        }
         toggleDepthRow();
         refreshInjection();
         updatePreview();
@@ -291,6 +417,16 @@ function registerEvents() {
         });
     } else {
         console.warn(LOG_PREFIX, '当前版本没有 GENERATION_AFTER_COMMANDS 事件，注入刷新将只依赖编辑与 CHAT_CHANGED。');
+    }
+
+    if (event_types.PERSONA_CHANGED) {
+        eventSource.on(event_types.PERSONA_CHANGED, () => {
+            // overlay 数据存于 chatMetadata，与 Persona 无关；仅按新 Persona 重算注入方案并刷新 UI，不写回原生 Persona 数据。
+            refreshInjection();
+            updatePreview();
+        });
+    } else {
+        console.warn(LOG_PREFIX, '当前版本没有 PERSONA_CHANGED 事件，Persona 切换后需通过编辑或切换聊天触发刷新。');
     }
 }
 

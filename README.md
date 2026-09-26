@@ -16,6 +16,7 @@ SillyTavern 第三方扩展：为**当前聊天**额外提供一份独立的「�
 - 自定义备注名 / 昵称
 - 补充 Persona 内容编辑（输入后 300ms 防抖自动保存）
 - 注入位置：系统提示区（IN_PROMPT）/ 聊天内指定深度（IN_CHAT）/ 提示词最前（BEFORE_PROMPT）
+- 注入位置可选「跟随原生 Persona 位置（镜像）」：只读镜像原生 Persona 的位置参数（详见下文同名章节）
 - 注入深度 depth（仅 IN_CHAT 时生效）
 - 注入角色：System / User / Assistant
 - 注入内容实时预览 + 当前聊天状态徽标
@@ -57,6 +58,7 @@ git clone https://github.com/songyu4echo1106-code/user-persona-overlay.git "publ
 {
     "version": 1,
     "enabled": false,
+    "followPersona": false,
     "nickname": "",
     "content": "",
     "position": 1,
@@ -68,6 +70,7 @@ git clone https://github.com/songyu4echo1106-code/user-persona-overlay.git "publ
 | 字段 | 含义 |
 | --- | --- |
 | `enabled` | 是否为当前聊天启用注入 |
+| `followPersona` | 是否跟随原生 Persona 位置（镜像）；读取失败时回退到手动 `position` / `depth` / `role` |
 | `nickname` | 备注名 / 昵称，会写入注入文本头部 |
 | `content` | 补充 Persona 正文 |
 | `position` | 1 = IN_PROMPT，2 = IN_CHAT，3 = BEFORE_PROMPT |
@@ -86,6 +89,23 @@ git clone https://github.com/songyu4echo1106-code/user-persona-overlay.git "publ
 - 生成前（`GENERATION_AFTER_COMMANDS`，若当前版本提供）再刷新一次，保证最新改动生效
 
 **不使用** `generate_interceptor`：它直接操作聊天消息数组，存在污染聊天记录的风险。
+
+## 跟随原生 Persona 位置（镜像）
+
+注入位置选择「跟随原生 Persona 位置（镜像）」后进入 Follow 模式：
+
+- 只读读取当前 SillyTavern 原生 Persona 的 position / depth / role，并通过 `setExtensionPrompt` 把相同参数镜像到本扩展的注入。
+- Follow 模式不会修改原生 Persona，也不会写入 `power_user.persona_descriptions`。
+- Follow 模式下实际注入参数由原生 Persona 决定，面板中的 depth 与角色控件会隐藏；当前聊天保存的手动配置仍会保留，仅用于回退。
+
+镜像行为按位置区分：
+
+- **IN_CHAT**：镜像原生 Persona 的 depth / role，可以进入相同注入层级；但相同 depth 下的最终消息先后顺序不由本扩展保证。
+- **IN_PROMPT**：原生 Persona 与本扩展注入属于独立的 prompt 项。如需严格控制两者的相邻顺序，请在 SillyTavern Prompt Manager 中手动调整。
+
+回退（fallback）：当原生 Persona 无法读取、不存在，或者其位置属于当前 Follow 实现无法镜像的类型时，自动回退到当前聊天保存的手动 position / depth / role，面板会显示「跟随不可用，已回退到手动配置」。这是正常的回退行为，而非扩展报错或功能失效；控制台会输出经过去重的提示。
+
+Persona 切换：扩展已注册 `PERSONA_CHANGED` 监听，原生 Persona 切换后会重新解析并刷新注入计划、状态和预览，不会修改原生 Persona 的任何数据。若当前酒馆版本不提供 `PERSONA_CHANGED` 事件，切换 Persona 后需通过编辑或切换聊天触发刷新。
 
 ## 兼容性
 

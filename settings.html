@@ -28,6 +28,7 @@
                 <option value="1">系统提示区（IN_PROMPT，与原生 Persona 同位）</option>
                 <option value="2">聊天内指定深度（IN_CHAT）</option>
                 <option value="3">提示词最前（BEFORE_PROMPT）</option>
+                <option value="follow">跟随原生 Persona 位置（镜像）</option>
             </select>
 
             <div id="upo_depth_row" class="upo-depth-row">
@@ -36,14 +37,17 @@
                 <small class="upo-hint" data-i18n="0 = 紧跟最后一条消息，数值越大位置越靠前。">0 = 紧跟最后一条消息，数值越大位置越靠前。</small>
             </div>
 
-            <label class="upo-label" for="upo_role" data-i18n="注入角色">注入角色</label>
-            <select id="upo_role" class="text_pole">
-                <option value="0">System</option>
-                <option value="1">User</option>
-                <option value="2">Assistant</option>
-            </select>
+            <div id="upo_role_row">
+                <label class="upo-label" for="upo_role" data-i18n="注入角色">注入角色</label>
+                <select id="upo_role" class="text_pole">
+                    <option value="0">System</option>
+                    <option value="1">User</option>
+                    <option value="2">Assistant</option>
+                </select>
+            </div>
 
             <label class="upo-label" for="upo_preview" data-i18n="注入内容预览">注入内容预览</label>
+            <small id="upo_plan_info" class="upo-hint"></small>
             <textarea id="upo_preview" class="text_pole upo-preview" rows="4" readonly></textarea>
 
             <small class="upo-hint">数据仅保存在当前聊天的元数据中，不同聊天互不影响；不会修改原生 Persona、角色卡或聊天消息。</small>
