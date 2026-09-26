@@ -1,0 +1,61 @@
+/* User Persona Overlay — 设置面板样式（作用域限定在本扩展面板内） */
+
+#user_persona_overlay_settings .upo-status-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.4em;
+    margin-bottom: 0.75em;
+}
+
+#user_persona_overlay_settings .upo-chat-name {
+    font-weight: 600;
+    word-break: break-all;
+}
+
+#user_persona_overlay_settings .upo-state-badge {
+    padding: 0.1em 0.6em;
+    border: 1px solid var(--SmartThemeBorderColor, #888);
+    border-radius: 1em;
+    font-size: 0.85em;
+    white-space: nowrap;
+}
+
+#user_persona_overlay_settings .upo-state-on {
+    color: #8fe38f;
+    border-color: #8fe38f;
+}
+
+#user_persona_overlay_settings .upo-state-off {
+    opacity: 0.7;
+}
+
+#user_persona_overlay_settings .upo-label {
+    display: block;
+    margin: 0.6em 0 0.25em;
+    font-weight: 600;
+}
+
+#user_persona_overlay_settings .upo-content,
+#user_persona_overlay_settings .upo-preview {
+    width: 100%;
+    resize: vertical;
+}
+
+#user_persona_overlay_settings .upo-preview {
+    opacity: 0.85;
+}
+
+#user_persona_overlay_settings .upo-depth-input {
+    width: 6em;
+}
+
+#user_persona_overlay_settings .upo-hint {
+    display: block;
+    margin-top: 0.4em;
+    opacity: 0.75;
+}
+
+#user_persona_overlay_settings select.text_pole {
+    width: 100%;
+}
