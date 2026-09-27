@@ -30,6 +30,7 @@ const DEFAULT_FLOATING_SETTINGS = Object.freeze({
     floatingEnabled: false,
     floatingIcon: 'kirimi',
     floatingSize: 'medium',
+    floatingTheme: 'light',
     floatingPosition: null, // { x, y } 为占视口宽高的比例，渲染时再换算并夹取，避免视口变化后跑出屏幕
 });
 const DATA_VERSION = 1;
@@ -411,11 +412,13 @@ function applyLibraryPersona(id) {
     }
     // 丢弃尚在防抖窗口内的输入，避免随后用旧字段值覆盖刚应用的内容。
     textFieldsSaver?.cancel?.();
+    floatingFieldsSaver?.cancel?.();
     saveOverlayData({ nickname: item.nickname, content: item.content });
     $('#upo_nickname').val(item.nickname);
     $('#upo_content').val(item.content);
     refreshInjection();
     updatePreview();
+    syncFloatingPanel();
     notify(`已应用 Persona 存档「${item.name}」到当前聊天。`, 'success');
 }
 
@@ -737,6 +740,42 @@ function updateFloatingIconAppearance() {
     applyIconPosition();
 }
 
+function getFloatingTheme() {
+    return getExtensionSettings().floatingTheme === 'dark' ? 'dark' : 'light';
+}
+
+function applyFloatingTheme() {
+    const theme = getFloatingTheme();
+    $('#upo_float_panel').toggleClass('upo-float-dark', theme === 'dark');
+    const button = $('#upo_float_theme');
+    const label = theme === 'dark' ? '切换日间模式' : '切换夜晚模式';
+    button.text(theme === 'dark' ? '☀' : '☾');
+    button.attr('title', label);
+    button.attr('aria-label', label);
+    button.attr('aria-pressed', theme === 'dark' ? 'true' : 'false');
+}
+
+function renderFloatingTemplateList() {
+    const list = $('#upo_float_tpl_list');
+    if (!list.length) {
+        return;
+    }
+    list.empty();
+    const library = loadLibrary();
+    if (!library.length) {
+        list.append($('<div class="upo-float-tpl-empty upo-hint"></div>').text('暂无保存的 Persona 模板'));
+        return;
+    }
+    library.forEach(item => {
+        const button = $('<button type="button" class="upo-float-tpl-item"></button>').text(item.name);
+        button.on('click', () => {
+            applyLibraryPersona(item.id);
+            renderFloatingTemplateList();
+        });
+        list.append(button);
+    });
+}
+
 function syncFloatingPanel() {
     if (!$('#upo_float_panel').length) {
         return;
@@ -783,7 +822,10 @@ function createFloatingUI() {
         <div id="upo_float_panel" style="display: none;">
             <div class="upo-float-header">
                 <span class="upo-float-title">User Persona Overlay</span>
-                <button id="upo_float_close" type="button" aria-label="关闭">×</button>
+                <div class="upo-float-actions">
+                    <button id="upo_float_theme" type="button" title="切换夜晚模式" aria-label="切换夜晚模式">☾</button>
+                    <button id="upo_float_close" type="button" aria-label="关闭">×</button>
+                </div>
             </div>
             <div class="upo-float-body">
                 <label class="checkbox_label" for="upo_float_enabled">
@@ -796,12 +838,15 @@ function createFloatingUI() {
                 <textarea id="upo_float_content" class="text_pole" rows="6"></textarea>
                 <small id="upo_float_plan" class="upo-hint"></small>
                 <input id="upo_float_refresh" type="button" class="menu_button" value="刷新 Follow" data-i18n="刷新 Follow" />
+                <input id="upo_float_tpl_toggle" type="button" class="menu_button" value="应用模板" data-i18n="应用模板" />
+                <div id="upo_float_tpl_list" class="upo-float-tpl-list" style="display: none;"></div>
             </div>
         </div>
     `);
     root.append(icon, panel);
     $('body').append(root);
     updateFloatingIconAppearance();
+    applyFloatingTheme();
     bindFloatingEvents();
     window.addEventListener('resize', onFloatingViewportResize);
 }
@@ -896,6 +941,22 @@ function bindFloatingEvents() {
     $('#upo_float_nickname, #upo_float_content').on('input', () => floatingFieldsSaver());
 
     $('#upo_float_refresh').on('click', refreshFollowManually);
+
+    $('#upo_float_theme').on('click', () => {
+        const next = getFloatingTheme() === 'dark' ? 'light' : 'dark';
+        saveExtensionSettings({ floatingTheme: next });
+        applyFloatingTheme();
+    });
+
+    $('#upo_float_tpl_toggle').on('click', () => {
+        const list = $('#upo_float_tpl_list');
+        if (list.is(':hidden')) {
+            renderFloatingTemplateList();
+            list.show();
+        } else {
+            list.hide();
+        }
+    });
 }
 
 function loadFloatingSettingsIntoPanel() {
