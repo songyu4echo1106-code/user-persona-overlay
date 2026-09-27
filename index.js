@@ -46,6 +46,7 @@ const PERSONA_POSITIONS = Object.freeze({
 
 let textFieldsSaver = null;
 let lastFollowWarnSignature = '';
+let libraryEditorState = { id: null, mode: 'preview' };
 
 function normalizePosition(value) {
     const num = Number(value);
@@ -267,7 +268,7 @@ function refreshInjection() {
 
 /* ------------ Persona 存档层：localStorage，独立于聊天数据，不直接参与生成 ------------ */
 
-function notifyLibrary(message, type = 'info') {
+function notify(message, type = 'info') {
     const toast = globalThis.toastr?.[type];
     if (typeof toast === 'function') {
         toast(message);
@@ -313,7 +314,7 @@ function saveLibrary(list) {
         return true;
     } catch (error) {
         console.warn(LOG_PREFIX, '写入 Persona 存档失败。', error);
-        notifyLibrary('Persona 存档写入失败（localStorage 不可用或已满）。', 'error');
+        notify('Persona 存档写入失败（localStorage 不可用或已满）。', 'error');
         return false;
     }
 }
@@ -321,12 +322,12 @@ function saveLibrary(list) {
 function saveCurrentToLibrary() {
     const data = getOverlayData();
     if (!data.content.trim()) {
-        notifyLibrary('当前补充 Persona 内容为空，未创建存档。', 'warning');
+        notify('当前补充 Persona 内容为空，未创建存档。', 'warning');
         return;
     }
     const name = String($('#upo_lib_name').val() ?? '').trim();
     if (!name) {
-        notifyLibrary('请先填写存档名称。', 'warning');
+        notify('请先填写存档名称。', 'warning');
         return;
     }
     const list = loadLibrary();
@@ -344,13 +345,13 @@ function saveCurrentToLibrary() {
     }
     $('#upo_lib_name').val('');
     renderLibrary();
-    notifyLibrary(`已保存 Persona 存档「${name}」。`, 'success');
+    notify(`已保存 Persona 存档「${name}」。`, 'success');
 }
 
 function applyLibraryPersona(id) {
     const item = loadLibrary().find(entry => entry.id === id);
     if (!item) {
-        notifyLibrary('未找到该存档，可能已被删除。', 'warning');
+        notify('未找到该存档，可能已被删除。', 'warning');
         renderLibrary();
         return;
     }
@@ -361,7 +362,7 @@ function applyLibraryPersona(id) {
     $('#upo_content').val(item.content);
     refreshInjection();
     updatePreview();
-    notifyLibrary(`已应用 Persona 存档「${item.name}」到当前聊天。`, 'success');
+    notify(`已应用 Persona 存档「${item.name}」到当前聊天。`, 'success');
 }
 
 function deleteLibraryPersona(id) {
@@ -374,7 +375,69 @@ function deleteLibraryPersona(id) {
         return;
     }
     saveLibrary(loadLibrary().filter(entry => entry.id !== id));
+    if (libraryEditorState.id === id) {
+        closeLibraryEditor();
+    }
     renderLibrary();
+}
+
+/**
+ * 打开存档的只读预览 / 编辑区域。仅操作 localStorage 中的存档，
+ * 不读取也不修改当前聊天的 chatMetadata。
+ */
+function openLibraryEditor(id, mode) {
+    const item = loadLibrary().find(entry => entry.id === id);
+    if (!item) {
+        notify('未找到该存档，可能已被删除。', 'warning');
+        renderLibrary();
+        return;
+    }
+    const isEdit = mode === 'edit';
+    libraryEditorState = { id, mode: isEdit ? 'edit' : 'preview' };
+    $('#upo_lib_edit_name').val(item.name);
+    $('#upo_lib_edit_nickname').val(item.nickname);
+    $('#upo_lib_edit_content').val(item.content);
+    $('#upo_lib_edit_name, #upo_lib_edit_nickname, #upo_lib_edit_content').prop('readonly', !isEdit);
+    $('#upo_lib_edit_save').toggle(isEdit);
+    $('#upo_lib_editor_hint').text(isEdit
+        ? '编辑仅修改此存档；已应用过该存档的聊天不会自动更新，需要时请在目标聊天重新点击「应用」。'
+        : '只读预览：不会修改当前聊天，也不会修改存档。');
+    $('#upo_lib_editor').show();
+}
+
+function closeLibraryEditor() {
+    libraryEditorState = { id: null, mode: 'preview' };
+    $('#upo_lib_editor').hide();
+}
+
+function saveLibraryEditor() {
+    const { id, mode } = libraryEditorState;
+    if (mode !== 'edit' || !id) {
+        return;
+    }
+    const list = loadLibrary();
+    const item = list.find(entry => entry.id === id);
+    if (!item) {
+        notify('未找到该存档，可能已被删除。', 'warning');
+        closeLibraryEditor();
+        renderLibrary();
+        return;
+    }
+    const name = String($('#upo_lib_edit_name').val() ?? '').trim();
+    if (!name) {
+        notify('存档名称不能为空。', 'warning');
+        return;
+    }
+    item.name = name;
+    item.nickname = String($('#upo_lib_edit_nickname').val() ?? '').trim();
+    item.content = String($('#upo_lib_edit_content').val() ?? '');
+    item.updatedAt = Date.now();
+    if (!saveLibrary(list)) {
+        return;
+    }
+    closeLibraryEditor();
+    renderLibrary();
+    notify(`已保存 Persona 存档「${name}」的修改。`, 'success');
 }
 
 function renderLibrary() {
@@ -390,11 +453,15 @@ function renderLibrary() {
         if (item.nickname) {
             name.append($('<small></small>').text(` · 昵称：${item.nickname}`));
         }
+        const previewButton = $('<input type="button" class="menu_button" value="预览" />')
+            .on('click', () => openLibraryEditor(item.id, 'preview'));
         const applyButton = $('<input type="button" class="menu_button" value="应用" />')
             .on('click', () => applyLibraryPersona(item.id));
+        const editButton = $('<input type="button" class="menu_button" value="编辑" />')
+            .on('click', () => openLibraryEditor(item.id, 'edit'));
         const deleteButton = $('<input type="button" class="menu_button" value="删除" />')
             .on('click', () => deleteLibraryPersona(item.id));
-        const actions = $('<div class="upo-library-item-actions"></div>').append(applyButton, deleteButton);
+        const actions = $('<div class="upo-library-item-actions"></div>').append(previewButton, applyButton, editButton, deleteButton);
         container.append($('<div class="upo-library-item"></div>').append(name, actions));
     }
 }
@@ -497,6 +564,17 @@ function bindPanel() {
     $('#upo_nickname, #upo_content').on('input', () => textFieldsSaver());
 
     $('#upo_lib_save').on('click', saveCurrentToLibrary);
+
+    $('#upo_follow_refresh').on('click', () => {
+        // 手动强制同步：重新读取原生 Persona 生效配置并重算注入计划；不修改原生 Persona。
+        lastFollowWarnSignature = '';
+        refreshInjection();
+        updatePreview();
+        notify('已重新读取原生 Persona 配置并刷新 Follow 状态。', 'info');
+    });
+
+    $('#upo_lib_edit_save').on('click', saveLibraryEditor);
+    $('#upo_lib_edit_cancel').on('click', closeLibraryEditor);
 }
 
 /* ---------------- 事件 ---------------- */

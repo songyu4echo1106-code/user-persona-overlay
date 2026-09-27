@@ -24,7 +24,10 @@
             <small class="upo-hint">提示：可尝试使用 \{{user}}、\{{char}} 等宏，是否生效以实际注入效果为准。</small>
 
             <label class="upo-label" for="upo_preview" data-i18n="注入内容预览">注入内容预览</label>
-            <small id="upo_plan_info" class="upo-hint"></small>
+            <div class="upo-follow-row">
+                <small id="upo_plan_info" class="upo-hint"></small>
+                <input id="upo_follow_refresh" type="button" class="menu_button" value="刷新 Follow" data-i18n="刷新 Follow" />
+            </div>
             <textarea id="upo_preview" class="text_pole upo-preview" rows="4" readonly></textarea>
 
             <small class="upo-hint" data-i18n="注入位置自动跟随原生 Persona（镜像）；无法镜像的类型会回退到本聊天保存的手动配置。">注入位置自动跟随原生 Persona（镜像）；无法镜像的类型会回退到本聊天保存的手动配置。</small>
@@ -38,6 +41,20 @@
                 <input id="upo_lib_save" type="button" class="menu_button" value="保存当前 Persona" data-i18n="保存当前 Persona" />
             </div>
             <div id="upo_lib_list" class="upo-library-list"></div>
+
+            <div id="upo_lib_editor" class="upo-library-editor" style="display: none;">
+                <small id="upo_lib_editor_hint" class="upo-hint"></small>
+                <label class="upo-label" for="upo_lib_edit_name" data-i18n="存档名称">存档名称</label>
+                <input id="upo_lib_edit_name" class="text_pole" type="text" maxlength="50" />
+                <label class="upo-label" for="upo_lib_edit_nickname" data-i18n="备注名 / 昵称">备注名 / 昵称</label>
+                <input id="upo_lib_edit_nickname" class="text_pole" type="text" maxlength="100" />
+                <label class="upo-label" for="upo_lib_edit_content" data-i18n="补充 Persona 内容">补充 Persona 内容</label>
+                <textarea id="upo_lib_edit_content" class="text_pole upo-content" rows="6"></textarea>
+                <div class="upo-library-editor-actions">
+                    <input id="upo_lib_edit_save" type="button" class="menu_button" value="保存修改" data-i18n="保存修改" />
+                    <input id="upo_lib_edit_cancel" type="button" class="menu_button" value="关闭" data-i18n="关闭" />
+                </div>
+            </div>
 
             <small class="upo-hint">数据仅保存在当前聊天的元数据中，不同聊天互不影响；不会修改原生 Persona、角色卡或聊天消息。</small>
         </div>
