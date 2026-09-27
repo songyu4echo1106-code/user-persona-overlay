@@ -177,6 +177,8 @@
     object-fit: contain;
     pointer-events: none;
     filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.35));
+    /* 原图主体四周留白较多：放大 1.3 倍并轻微回正，让主体占满按钮且不被裁切。 */
+    transform: scale(1.3) translate(-4%, -3%);
 }
 
 #upo_float_icon.upo-float-icon-kirimi:hover img {
