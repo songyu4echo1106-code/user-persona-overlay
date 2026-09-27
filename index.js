@@ -18,6 +18,20 @@ const METADATA_KEY = 'user_persona_overlay';
 const PROMPT_KEY = 'user_persona_overlay';
 const LIBRARY_STORAGE_KEY = 'user_persona_overlay_library';
 const LOG_PREFIX = '[User Persona Overlay]';
+const EXTENSION_SETTINGS_KEY = 'user_persona_overlay';
+const FLOATING_ICON_URL = 'scripts/extensions/third-party/user-persona-overlay/assets/kirimi.png';
+const FLOATING_DRAG_THRESHOLD_PX = 8;
+const FLOATING_SIZES = Object.freeze({
+    small: 44,
+    medium: 56,
+    large: 72,
+});
+const DEFAULT_FLOATING_SETTINGS = Object.freeze({
+    floatingEnabled: false,
+    floatingIcon: 'kirimi',
+    floatingSize: 'medium',
+    floatingPosition: null, // { x, y } 为占视口宽高的比例，渲染时再换算并夹取，避免视口变化后跑出屏幕
+});
 const DATA_VERSION = 1;
 const TEXT_DEBOUNCE_MS = 300;
 const MIN_DEPTH = 0;
@@ -47,6 +61,7 @@ const PERSONA_POSITIONS = Object.freeze({
 let textFieldsSaver = null;
 let lastFollowWarnSignature = '';
 let libraryEditorState = { id: null, mode: 'preview' };
+let floatingFieldsSaver = null;
 
 function normalizePosition(value) {
     const num = Number(value);
@@ -154,6 +169,45 @@ function saveOverlayData(patch) {
     }
     store[METADATA_KEY] = { ...getOverlayData(), ...patch, version: DATA_VERSION };
     persistMetadata();
+}
+
+/* ------ 扩展级设置层：extensionSettings，与聊天数据、Persona 存档相互独立 ------ */
+
+function getExtensionSettings() {
+    try {
+        const context = getContext();
+        const store = context?.extensionSettings;
+        if (store && typeof store === 'object') {
+            const raw = store[EXTENSION_SETTINGS_KEY];
+            if (!raw || typeof raw !== 'object') {
+                store[EXTENSION_SETTINGS_KEY] = { ...DEFAULT_FLOATING_SETTINGS };
+            }
+            return { ...DEFAULT_FLOATING_SETTINGS, ...store[EXTENSION_SETTINGS_KEY] };
+        }
+    } catch (error) {
+        console.warn(LOG_PREFIX, 'getContext().extensionSettings 读取失败。', error);
+    }
+    return { ...DEFAULT_FLOATING_SETTINGS };
+}
+
+function saveExtensionSettings(patch) {
+    try {
+        const context = getContext();
+        const store = context?.extensionSettings;
+        if (!store || typeof store !== 'object') {
+            console.warn(LOG_PREFIX, 'extensionSettings 不可用，悬浮窗设置未保存。');
+            return;
+        }
+        store[EXTENSION_SETTINGS_KEY] = { ...getExtensionSettings(), ...patch };
+        const save = context?.saveSettingsDebounced;
+        if (typeof save === 'function') {
+            save.call(context);
+        } else {
+            console.warn(LOG_PREFIX, '当前版本没有 saveSettingsDebounced，悬浮窗设置仅保留在内存。');
+        }
+    } catch (error) {
+        console.warn(LOG_PREFIX, '保存悬浮窗设置失败。', error);
+    }
 }
 
 /* ---------------- 注入层：仅 setExtensionPrompt 内存注入，不落盘 ---------------- */
@@ -509,7 +563,7 @@ function updateStateBadge() {
     badge.attr('title', `位置：${positionNames[plan.position]}${depthPart} · 角色：${roleNames[plan.role]}`);
 }
 
-function updatePlanInfo(plan) {
+function buildPlanText(plan) {
     const positionNames = {
         [extension_prompt_types.IN_PROMPT]: 'IN_PROMPT（系统提示区）',
         [extension_prompt_types.IN_CHAT]: 'IN_CHAT（聊天内）',
@@ -521,10 +575,25 @@ function updatePlanInfo(plan) {
         [extension_prompt_roles.ASSISTANT]: 'Assistant',
     };
     const details = `实际位置：${positionNames[plan.position]} · 角色：${roleNames[plan.role]} · Depth：${plan.depth}`;
-    const text = plan.followed
+    return plan.followed
         ? `已跟随原生 Persona 位置（镜像） — ${details}`
         : `跟随不可用，已回退到手动配置 — ${details}`;
-    $('#upo_plan_info').text(text);
+}
+
+function updatePlanInfo(plan) {
+    $('#upo_plan_info').text(buildPlanText(plan));
+}
+
+function updateFloatingPlanText(plan) {
+    $('#upo_float_plan').text(buildPlanText(plan));
+}
+
+function refreshFollowManually() {
+    // 手动强制同步：重新读取原生 Persona 生效配置并重算注入计划；不修改原生 Persona。
+    lastFollowWarnSignature = '';
+    refreshInjection();
+    updatePreview();
+    notify('已重新读取原生 Persona 配置并刷新 Follow 状态。', 'info');
 }
 
 function updatePreview() {
@@ -533,6 +602,7 @@ function updatePreview() {
     const text = buildInjectionText(data);
     $('#upo_preview').val(text || '（当前不会注入任何内容：未启用或内容为空）');
     updatePlanInfo(plan);
+    updateFloatingPlanText(plan);
     updateStateBadge();
 }
 
@@ -547,16 +617,18 @@ function loadOverlayIntoPanel() {
 
 function bindPanel() {
     $('#upo_enabled').on('change', function () {
-        saveOverlayData({ enabled: Boolean(this.checked) });
+        const enabled = Boolean(this.checked);
+        saveOverlayData({ enabled });
+        $('#upo_float_enabled').prop('checked', enabled);
         refreshInjection();
         updatePreview();
     });
 
     textFieldsSaver = debounce(() => {
-        saveOverlayData({
-            nickname: String($('#upo_nickname').val() ?? ''),
-            content: String($('#upo_content').val() ?? ''),
-        });
+        const nickname = String($('#upo_nickname').val() ?? '');
+        const content = String($('#upo_content').val() ?? '');
+        saveOverlayData({ nickname, content });
+        syncAllTextFields(nickname, content);
         refreshInjection();
         updatePreview();
     }, TEXT_DEBOUNCE_MS);
@@ -565,16 +637,272 @@ function bindPanel() {
 
     $('#upo_lib_save').on('click', saveCurrentToLibrary);
 
-    $('#upo_follow_refresh').on('click', () => {
-        // 手动强制同步：重新读取原生 Persona 生效配置并重算注入计划；不修改原生 Persona。
-        lastFollowWarnSignature = '';
-        refreshInjection();
-        updatePreview();
-        notify('已重新读取原生 Persona 配置并刷新 Follow 状态。', 'info');
-    });
+    $('#upo_follow_refresh').on('click', refreshFollowManually);
 
     $('#upo_lib_edit_save').on('click', saveLibraryEditor);
     $('#upo_lib_edit_cancel').on('click', closeLibraryEditor);
+
+    $('#upo_floating_enabled').on('change', function () {
+        const enabled = Boolean(this.checked);
+        saveExtensionSettings({ floatingEnabled: enabled });
+        if (enabled) {
+            createFloatingUI();
+        } else {
+            destroyFloatingUI();
+        }
+    });
+
+    $('#upo_floating_icon').on('change', function () {
+        saveExtensionSettings({ floatingIcon: this.value === 'plain' ? 'plain' : 'kirimi' });
+        updateFloatingIconAppearance();
+    });
+
+    $('#upo_floating_size').on('change', function () {
+        const size = FLOATING_SIZES[this.value] ? this.value : 'medium';
+        saveExtensionSettings({ floatingSize: size });
+        updateFloatingIconAppearance();
+    });
+}
+
+/* ------------ 悬浮窗层：纯 UI 壳，数据仍走 saveOverlayData 与现有 Follow 链 ------------ */
+
+function getFloatingSizePx() {
+    const size = getExtensionSettings().floatingSize;
+    return FLOATING_SIZES[size] ?? FLOATING_SIZES.medium;
+}
+
+function clampIconPosition(left, top, size) {
+    const maxLeft = Math.max(0, window.innerWidth - size);
+    const maxTop = Math.max(0, window.innerHeight - size);
+    return {
+        left: Math.min(Math.max(left, 0), maxLeft),
+        top: Math.min(Math.max(top, 0), maxTop),
+    };
+}
+
+function applyIconPosition() {
+    const icon = document.getElementById('upo_float_icon');
+    if (!icon) {
+        return;
+    }
+    const size = getFloatingSizePx();
+    const position = getExtensionSettings().floatingPosition;
+    let left;
+    let top;
+    if (position && Number.isFinite(position.x) && Number.isFinite(position.y)) {
+        left = position.x * window.innerWidth;
+        top = position.y * window.innerHeight;
+    } else {
+        // 默认：右侧偏下，避开酒馆顶部按钮区。
+        left = window.innerWidth - size - 16;
+        top = window.innerHeight * 0.55;
+    }
+    const clamped = clampIconPosition(left, top, size);
+    icon.style.left = `${clamped.left}px`;
+    icon.style.top = `${clamped.top}px`;
+}
+
+function persistIconPosition() {
+    const icon = document.getElementById('upo_float_icon');
+    if (!icon) {
+        return;
+    }
+    const left = Number.parseFloat(icon.style.left) || 0;
+    const top = Number.parseFloat(icon.style.top) || 0;
+    saveExtensionSettings({
+        floatingPosition: {
+            x: left / window.innerWidth,
+            y: top / window.innerHeight,
+        },
+    });
+}
+
+function updateFloatingIconAppearance() {
+    const icon = $('#upo_float_icon');
+    if (!icon.length) {
+        return;
+    }
+    const settings = getExtensionSettings();
+    const size = getFloatingSizePx();
+    icon.css({ width: `${size}px`, height: `${size}px` });
+    const useKirimi = settings.floatingIcon !== 'plain';
+    icon.toggleClass('upo-float-icon-kirimi', useKirimi);
+    icon.toggleClass('upo-float-icon-plain', !useKirimi);
+    const image = icon.find('img');
+    if (useKirimi && !image.length) {
+        icon.append($('<img alt="" draggable="false" />').attr('src', FLOATING_ICON_URL));
+    } else if (!useKirimi && image.length) {
+        image.remove();
+    }
+    applyIconPosition();
+}
+
+function syncFloatingPanel() {
+    if (!$('#upo_float_panel').length) {
+        return;
+    }
+    const data = getOverlayData();
+    $('#upo_float_enabled').prop('checked', data.enabled);
+    $('#upo_float_nickname').val(data.nickname);
+    $('#upo_float_content').val(data.content);
+    updateFloatingPlanText(resolveInjectionPlan(data));
+}
+
+function syncAllTextFields(nickname, content) {
+    $('#upo_nickname, #upo_float_nickname').val(nickname);
+    $('#upo_content, #upo_float_content').val(content);
+}
+
+function toggleFloatingPanel(force) {
+    const panel = $('#upo_float_panel');
+    if (!panel.length) {
+        return;
+    }
+    const shouldOpen = typeof force === 'boolean' ? force : panel.is(':hidden');
+    if (shouldOpen) {
+        syncFloatingPanel();
+        panel.show();
+    } else {
+        // 关闭前把尚在防抖窗口内的悬浮编辑落盘，避免丢失。
+        floatingFieldsSaver?.flush?.();
+        panel.hide();
+    }
+}
+
+function onFloatingViewportResize() {
+    applyIconPosition();
+}
+
+function createFloatingUI() {
+    if (document.getElementById('upo_floating_root')) {
+        return;
+    }
+    const root = $('<div id="upo_floating_root"></div>');
+    const icon = $('<div id="upo_float_icon" role="button" aria-label="User Persona Overlay"></div>');
+    const panel = $(`
+        <div id="upo_float_panel" style="display: none;">
+            <div class="upo-float-header">
+                <span class="upo-float-title">User Persona Overlay</span>
+                <button id="upo_float_close" type="button" aria-label="关闭">×</button>
+            </div>
+            <div class="upo-float-body">
+                <label class="checkbox_label" for="upo_float_enabled">
+                    <input id="upo_float_enabled" type="checkbox" />
+                    <span data-i18n="当前聊天启用补充 Persona">当前聊天启用补充 Persona</span>
+                </label>
+                <label class="upo-label" for="upo_float_nickname" data-i18n="备注名 / 昵称">备注名 / 昵称</label>
+                <input id="upo_float_nickname" class="text_pole" type="text" maxlength="100" />
+                <label class="upo-label" for="upo_float_content" data-i18n="补充 Persona 内容">补充 Persona 内容</label>
+                <textarea id="upo_float_content" class="text_pole" rows="6"></textarea>
+                <small id="upo_float_plan" class="upo-hint"></small>
+                <input id="upo_float_refresh" type="button" class="menu_button" value="刷新 Follow" data-i18n="刷新 Follow" />
+            </div>
+        </div>
+    `);
+    root.append(icon, panel);
+    $('body').append(root);
+    updateFloatingIconAppearance();
+    bindFloatingEvents();
+    window.addEventListener('resize', onFloatingViewportResize);
+}
+
+function destroyFloatingUI() {
+    // 关闭前把尚在防抖窗口内的悬浮编辑落盘，避免丢失。
+    floatingFieldsSaver?.flush?.();
+    window.removeEventListener('resize', onFloatingViewportResize);
+    $('#upo_floating_root').remove();
+}
+
+function bindFloatingIconDrag(icon) {
+    let startX = 0;
+    let startY = 0;
+    let startLeft = 0;
+    let startTop = 0;
+    let activePointerId = null;
+    let moved = false;
+
+    icon.addEventListener('pointerdown', (event) => {
+        if (activePointerId !== null) {
+            return;
+        }
+        activePointerId = event.pointerId;
+        moved = false;
+        startX = event.clientX;
+        startY = event.clientY;
+        startLeft = Number.parseFloat(icon.style.left) || 0;
+        startTop = Number.parseFloat(icon.style.top) || 0;
+        icon.setPointerCapture?.(activePointerId);
+    });
+
+    icon.addEventListener('pointermove', (event) => {
+        if (event.pointerId !== activePointerId) {
+            return;
+        }
+        const deltaX = event.clientX - startX;
+        const deltaY = event.clientY - startY;
+        if (!moved && Math.hypot(deltaX, deltaY) < FLOATING_DRAG_THRESHOLD_PX) {
+            return;
+        }
+        moved = true;
+        const clamped = clampIconPosition(startLeft + deltaX, startTop + deltaY, getFloatingSizePx());
+        icon.style.left = `${clamped.left}px`;
+        icon.style.top = `${clamped.top}px`;
+    });
+
+    const finish = (event) => {
+        if (event.pointerId !== activePointerId) {
+            return;
+        }
+        icon.releasePointerCapture?.(activePointerId);
+        activePointerId = null;
+        if (moved) {
+            moved = false;
+            persistIconPosition();
+        } else if (event.type === 'pointerup') {
+            // 未发生位移的短按 = 点击：展开/收起悬浮窗。
+            toggleFloatingPanel();
+        }
+    };
+
+    icon.addEventListener('pointerup', finish);
+    icon.addEventListener('pointercancel', finish);
+}
+
+function bindFloatingEvents() {
+    const icon = document.getElementById('upo_float_icon');
+    if (icon) {
+        bindFloatingIconDrag(icon);
+    }
+
+    $('#upo_float_close').on('click', () => toggleFloatingPanel(false));
+
+    $('#upo_float_enabled').on('change', function () {
+        const enabled = Boolean(this.checked);
+        saveOverlayData({ enabled });
+        $('#upo_enabled').prop('checked', enabled);
+        refreshInjection();
+        updatePreview();
+    });
+
+    floatingFieldsSaver = debounce(() => {
+        const nickname = String($('#upo_float_nickname').val() ?? '');
+        const content = String($('#upo_float_content').val() ?? '');
+        saveOverlayData({ nickname, content });
+        syncAllTextFields(nickname, content);
+        refreshInjection();
+        updatePreview();
+    }, TEXT_DEBOUNCE_MS);
+
+    $('#upo_float_nickname, #upo_float_content').on('input', () => floatingFieldsSaver());
+
+    $('#upo_float_refresh').on('click', refreshFollowManually);
+}
+
+function loadFloatingSettingsIntoPanel() {
+    const settings = getExtensionSettings();
+    $('#upo_floating_enabled').prop('checked', Boolean(settings.floatingEnabled));
+    $('#upo_floating_icon').val(settings.floatingIcon === 'plain' ? 'plain' : 'kirimi');
+    $('#upo_floating_size').val(FLOATING_SIZES[settings.floatingSize] ? settings.floatingSize : 'medium');
 }
 
 /* ---------------- 事件 ---------------- */
@@ -583,7 +911,9 @@ function registerEvents() {
     eventSource.on(event_types.CHAT_CHANGED, () => {
         // 丢弃尚在防抖窗口内的旧文本，避免写进新聊天的元数据。
         textFieldsSaver?.cancel?.();
+        floatingFieldsSaver?.cancel?.();
         loadOverlayIntoPanel();
+        syncFloatingPanel();
         refreshInjection();
     });
 
@@ -622,6 +952,10 @@ jQuery(async () => {
         bindPanel();
         renderLibrary();
         loadOverlayIntoPanel();
+        loadFloatingSettingsIntoPanel();
+        if (getExtensionSettings().floatingEnabled) {
+            createFloatingUI();
+        }
         registerEvents();
         refreshInjection();
         console.log(LOG_PREFIX, '扩展已加载。');
