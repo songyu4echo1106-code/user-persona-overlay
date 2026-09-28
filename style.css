@@ -122,6 +122,19 @@
     white-space: nowrap;
 }
 
+#user_persona_overlay_settings .upo-persona-actions,
+#upo_float_panel .upo-persona-actions {
+    display: flex;
+    gap: 0.5em;
+    margin-top: 0.4em;
+}
+
+#user_persona_overlay_settings .upo-persona-actions .menu_button,
+#upo_float_panel .upo-persona-actions .menu_button {
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
 #user_persona_overlay_settings .upo-library-editor {
     margin-top: 0.6em;
     padding: 0.6em;

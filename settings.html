@@ -44,6 +44,10 @@
             <label class="upo-label" for="upo_content" data-i18n="补充 Persona 内容">补充 Persona 内容</label>
             <textarea id="upo_content" class="text_pole upo-content" rows="6" placeholder="只对当前聊天生效的补充人设，例如身份、外貌、当前处境、与角色的关系等。"></textarea>
             <small class="upo-hint">提示：可尝试使用 \{{user}}、\{{char}} 等宏，是否生效以实际注入效果为准。</small>
+            <div class="upo-persona-actions">
+                <input id="upo_undo_template" type="button" class="menu_button" value="撤回一步" data-i18n="撤回一步" />
+                <input id="upo_clear_persona" type="button" class="menu_button" value="清空当前 Persona" data-i18n="清空当前 Persona" />
+            </div>
 
             <label class="upo-label" for="upo_preview" data-i18n="注入内容预览">注入内容预览</label>
             <div class="upo-follow-row">

@@ -15,6 +15,7 @@ import {
 
 const TEMPLATE_NAMESPACE = 'third-party/user-persona-overlay';
 const METADATA_KEY = 'user_persona_overlay';
+const UNDO_METADATA_KEY = 'user_persona_overlay_undo';
 const PROMPT_KEY = 'user_persona_overlay';
 const LIBRARY_STORAGE_KEY = 'user_persona_overlay_library';
 const LOG_PREFIX = '[User Persona Overlay]';
@@ -418,14 +419,73 @@ function applyLibraryPersona(id) {
     // 丢弃尚在防抖窗口内的输入，避免随后用旧字段值覆盖刚应用的内容。
     textFieldsSaver?.cancel?.();
     floatingFieldsSaver?.cancel?.();
-    const currentContent = getOverlayData().content.trim();
+    const data = getOverlayData();
+    const currentContent = data.content.trim();
     const content = currentContent ? `${currentContent}\n\n${templateContent}` : templateContent;
+    // 记录应用前的 content 供「撤回一步」恢复；只有成功应用模板才会产生撤回记录。
+    saveUndoStack([...getUndoStack(), data.content]);
     saveOverlayData({ content });
     $('#upo_content').val(content);
     refreshInjection();
     updatePreview();
     syncFloatingPanel();
     notify(`已应用 Persona 存档「${item.name}」到当前聊天。`, 'success');
+}
+
+/* ------------ 撤回一步与清空：复用 saveOverlayData 流程，撤回历史存于 chatMetadata 独立字段 ------------ */
+
+function getUndoStack() {
+    const store = getMetadataStore();
+    const raw = store ? store[UNDO_METADATA_KEY] : null;
+    if (!Array.isArray(raw)) {
+        return [];
+    }
+    return raw.filter(entry => typeof entry === 'string');
+}
+
+function saveUndoStack(stack) {
+    const store = getMetadataStore();
+    if (!store) {
+        console.warn(LOG_PREFIX, 'chatMetadata 不可用，撤回历史未保存。');
+        return;
+    }
+    store[UNDO_METADATA_KEY] = stack;
+    persistMetadata();
+}
+
+function undoLastPersonaTemplate() {
+    const stack = getUndoStack();
+    if (!stack.length) {
+        notify('没有可撤回的模板应用。', 'info');
+        return;
+    }
+    // 与 applyLibraryPersona 同理，丢弃防抖窗口内的输入，避免随后覆盖刚恢复的内容。
+    textFieldsSaver?.cancel?.();
+    floatingFieldsSaver?.cancel?.();
+    const content = stack[stack.length - 1];
+    saveUndoStack(stack.slice(0, -1));
+    saveOverlayData({ content });
+    $('#upo_content').val(content);
+    refreshInjection();
+    updatePreview();
+    syncFloatingPanel();
+    notify('已撤回最近一次模板应用。', 'success');
+}
+
+function clearCurrentPersona() {
+    if (!getOverlayData().content.trim()) {
+        notify('当前补充 Persona 内容为空，无需清空。', 'info');
+        return;
+    }
+    // 只清空 content；nickname / enabled / followPersona 与模板撤回历史均不受影响。
+    textFieldsSaver?.cancel?.();
+    floatingFieldsSaver?.cancel?.();
+    saveOverlayData({ content: '' });
+    $('#upo_content').val('');
+    refreshInjection();
+    updatePreview();
+    syncFloatingPanel();
+    notify('已清空当前聊天的补充 Persona 内容。', 'success');
 }
 
 function deleteLibraryPersona(id) {
@@ -644,6 +704,9 @@ function bindPanel() {
 
     $('#upo_nickname, #upo_content').on('input', () => textFieldsSaver());
 
+    $('#upo_undo_template').on('click', undoLastPersonaTemplate);
+    $('#upo_clear_persona').on('click', clearCurrentPersona);
+
     $('#upo_lib_save').on('click', saveCurrentToLibrary);
 
     $('#upo_follow_refresh').on('click', refreshFollowManually);
@@ -842,6 +905,10 @@ function createFloatingUI() {
                 <input id="upo_float_nickname" class="text_pole" type="text" maxlength="100" />
                 <label class="upo-label" for="upo_float_content" data-i18n="补充 Persona 内容">补充 Persona 内容</label>
                 <textarea id="upo_float_content" class="text_pole" rows="6"></textarea>
+                <div class="upo-persona-actions">
+                    <input id="upo_float_undo_template" type="button" class="menu_button" value="撤回一步" data-i18n="撤回一步" />
+                    <input id="upo_float_clear_persona" type="button" class="menu_button" value="清空当前 Persona" data-i18n="清空当前 Persona" />
+                </div>
                 <small id="upo_float_plan" class="upo-hint"></small>
                 <input id="upo_float_refresh" type="button" class="menu_button" value="刷新 Follow" data-i18n="刷新 Follow" />
                 <input id="upo_float_tpl_toggle" type="button" class="menu_button" value="应用模板" data-i18n="应用模板" />
@@ -945,6 +1012,9 @@ function bindFloatingEvents() {
     }, TEXT_DEBOUNCE_MS);
 
     $('#upo_float_nickname, #upo_float_content').on('input', () => floatingFieldsSaver());
+
+    $('#upo_float_undo_template').on('click', undoLastPersonaTemplate);
+    $('#upo_float_clear_persona').on('click', clearCurrentPersona);
 
     $('#upo_float_refresh').on('click', refreshFollowManually);
 
