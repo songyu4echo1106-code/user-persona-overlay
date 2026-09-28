@@ -410,12 +410,18 @@ function applyLibraryPersona(id) {
         renderLibrary();
         return;
     }
+    const templateContent = typeof item.content === 'string' ? item.content.trim() : '';
+    if (!templateContent) {
+        notify(`存档「${item.name}」内容为空，未追加到当前聊天。`, 'warning');
+        return;
+    }
     // 丢弃尚在防抖窗口内的输入，避免随后用旧字段值覆盖刚应用的内容。
     textFieldsSaver?.cancel?.();
     floatingFieldsSaver?.cancel?.();
-    saveOverlayData({ nickname: item.nickname, content: item.content });
-    $('#upo_nickname').val(item.nickname);
-    $('#upo_content').val(item.content);
+    const currentContent = getOverlayData().content.trim();
+    const content = currentContent ? `${currentContent}\n\n${templateContent}` : templateContent;
+    saveOverlayData({ content });
+    $('#upo_content').val(content);
     refreshInjection();
     updatePreview();
     syncFloatingPanel();
