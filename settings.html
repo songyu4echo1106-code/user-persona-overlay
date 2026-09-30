@@ -50,14 +50,16 @@
                 <input id="upo_from_chat" type="button" class="menu_button" value="从其他聊天应用" data-i18n="从其他聊天应用" />
             </div>
 
+            <div id="upo_chat_picker_home">
             <div id="upo_chat_picker" class="upo-chat-picker" style="display: none;">
                 <small class="upo-hint" data-i18n="仅列出当前角色其他已设置补充 Persona 的聊天；「应用」为整体覆盖复制，复制后两个聊天互不影响。">仅列出当前角色其他已设置补充 Persona 的聊天；「应用」为整体覆盖复制，复制后两个聊天互不影响。</small>
                 <div class="upo-chat-picker-toolbar">
-                    <input id="upo_chat_picker_search" class="text_pole" type="text" maxlength="100" placeholder="搜索聊天名称…" />
+                    <input id="upo_chat_picker_search" class="text_pole" type="text" maxlength="100" placeholder="搜索聊天名称或备注名…" />
                     <input id="upo_chat_picker_refresh" type="button" class="menu_button" value="刷新" data-i18n="刷新" />
                 </div>
                 <small id="upo_chat_picker_status" class="upo-hint"></small>
                 <div id="upo_chat_picker_list" class="upo-chat-picker-list"></div>
+            </div>
             </div>
 
             <label class="upo-label" for="upo_preview" data-i18n="注入内容预览">注入内容预览</label>

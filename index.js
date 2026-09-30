@@ -66,6 +66,8 @@ let lastFollowWarnSignature = '';
 let libraryEditorState = { id: null, mode: 'preview' };
 let floatingFieldsSaver = null;
 let chatPickerCache = { key: null, items: [] };
+let chatPickerHost = 'settings';
+const expandedChatPickerItems = new Set();
 
 function normalizePosition(value) {
     const num = Number(value);
@@ -597,25 +599,39 @@ function renderChatPickerItems() {
     listContainer.empty();
     const filter = String($('#upo_chat_picker_search').val() ?? '').trim().toLowerCase();
     const matched = chatPickerCache.items
-        .filter(item => !filter || item.chatName.toLowerCase().includes(filter));
+        .filter(item => !filter
+            || item.chatName.toLowerCase().includes(filter)
+            || item.data.nickname.toLowerCase().includes(filter));
     if (!matched.length) {
         if (chatPickerCache.items.length && filter) {
-            listContainer.append($('<div class="upo-hint"></div>').text('没有名称匹配的聊天。'));
+            listContainer.append($('<div class="upo-hint"></div>').text('没有名称或备注名匹配的聊天。'));
         }
         return;
     }
     for (const item of matched) {
+        const expanded = expandedChatPickerItems.has(item.chatName);
         const name = $('<div class="upo-chat-item-name"></div>').text(item.chatName);
+        name.prepend($('<span class="upo-chat-item-caret"></span>').text(expanded ? '▾ ' : '▸ '));
         if (!item.data.enabled) {
             name.append($('<small></small>').text(' · 原聊天中已禁用'));
         }
         const nickname = $('<div class="upo-chat-item-nickname"></div>')
             .text(`备注名：${item.data.nickname.trim() || '（未设置）'}`);
-        const preview = $('<div class="upo-chat-item-preview"></div>')
-            .text(buildChatPreview(item.data.content));
-        const applyButton = $('<input type="button" class="menu_button" value="应用" />')
+        const contentBlock = expanded
+            ? $('<div class="upo-chat-item-full"></div>').text(item.data.content)
+            : $('<div class="upo-chat-item-preview"></div>').text(buildChatPreview(item.data.content));
+        const applyButton = $(`<input type="button" class="menu_button" value="${expanded ? '应用这个 Persona' : '应用'}" />`)
             .on('click', () => applyChatOverlay(item));
-        const textColumn = $('<div class="upo-chat-item-text"></div>').append(name, nickname, preview);
+        const textColumn = $('<div class="upo-chat-item-text"></div>')
+            .append(name, nickname, contentBlock)
+            .on('click', () => {
+                if (expandedChatPickerItems.has(item.chatName)) {
+                    expandedChatPickerItems.delete(item.chatName);
+                } else {
+                    expandedChatPickerItems.add(item.chatName);
+                }
+                renderChatPickerItems();
+            });
         listContainer.append($('<div class="upo-chat-item-row"></div>').append(textColumn, applyButton));
     }
 }
@@ -627,6 +643,10 @@ async function loadChatPickerList(forceRefresh = false) {
     if (!chatContext) {
         status.text('仅角色单人聊天支持从其他聊天复制（群聊或尚未加载聊天时不可用）。');
         return;
+    }
+    // 换聊天或手动刷新后，之前的展开状态已失效，一并收起。
+    if (forceRefresh || chatPickerCache.key !== chatContext.cacheKey) {
+        expandedChatPickerItems.clear();
     }
     if (!forceRefresh && chatPickerCache.key === chatContext.cacheKey) {
         status.text(chatPickerCache.items.length ? '' : '当前角色的其他聊天中没有已设置的补充 Persona。');
@@ -651,13 +671,26 @@ async function loadChatPickerList(forceRefresh = false) {
     }
 }
 
-function toggleChatPicker(force) {
+/**
+ * 选择器只有一份 DOM，在主设置面板与悬浮窗之间移动复用，host 记录当前挂载位置。
+ * 两个入口共用同一份数据读取、搜索、展开与应用逻辑，只是挂载点不同。
+ */
+function placeChatPicker(host) {
+    chatPickerHost = host;
     const picker = $('#upo_chat_picker');
-    const shouldOpen = typeof force === 'boolean' ? force : picker.is(':hidden');
+    const slot = host === 'floating' ? '#upo_float_picker_slot' : '#upo_chat_picker_home';
+    $(slot).append(picker);
+}
+
+function toggleChatPicker(force, host = chatPickerHost) {
+    const picker = $('#upo_chat_picker');
+    const shouldOpen = typeof force === 'boolean' ? force : picker.is(':hidden') || chatPickerHost !== host;
     if (!shouldOpen) {
+        expandedChatPickerItems.clear();
         picker.hide();
         return;
     }
+    placeChatPicker(host);
     picker.show();
     loadChatPickerList(false);
 }
@@ -909,7 +942,7 @@ function bindPanel() {
     $('#upo_undo_template').on('click', undoLastPersonaTemplate);
     $('#upo_clear_persona').on('click', clearCurrentPersona);
 
-    $('#upo_from_chat').on('click', () => toggleChatPicker());
+    $('#upo_from_chat').on('click', () => toggleChatPicker(undefined, 'settings'));
     $('#upo_chat_picker_search').on('input', () => renderChatPickerItems());
     $('#upo_chat_picker_refresh').on('click', () => loadChatPickerList(true));
 
@@ -1119,6 +1152,8 @@ function createFloatingUI() {
                 <input id="upo_float_refresh" type="button" class="menu_button" value="刷新 Follow" data-i18n="刷新 Follow" />
                 <input id="upo_float_tpl_toggle" type="button" class="menu_button" value="应用模板" data-i18n="应用模板" />
                 <div id="upo_float_tpl_list" class="upo-float-tpl-list" style="display: none;"></div>
+                <input id="upo_float_from_chat" type="button" class="menu_button" value="从其他聊天应用" data-i18n="从其他聊天应用" />
+                <div id="upo_float_picker_slot"></div>
             </div>
         </div>
     `);
@@ -1134,6 +1169,9 @@ function destroyFloatingUI() {
     // 关闭前把尚在防抖窗口内的悬浮编辑落盘，避免丢失。
     floatingFieldsSaver?.flush?.();
     window.removeEventListener('resize', onFloatingViewportResize);
+    // 选择器若正挂在悬浮窗内，先移回主面板插槽并收起，避免随悬浮窗一起被移除。
+    placeChatPicker('settings');
+    $('#upo_chat_picker').hide();
     $('#upo_floating_root').remove();
 }
 
@@ -1239,6 +1277,8 @@ function bindFloatingEvents() {
             list.hide();
         }
     });
+
+    $('#upo_float_from_chat').on('click', () => toggleChatPicker(undefined, 'floating'));
 }
 
 function loadFloatingSettingsIntoPanel() {
