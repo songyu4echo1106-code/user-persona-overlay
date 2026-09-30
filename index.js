@@ -572,7 +572,7 @@ async function listSiblingChatOverlays(chatContext, onProgress) {
         try {
             const chatData = await postJson('/api/chats/get', {
                 ch_name: chatContext.charName,
-                file_name: fileName,
+                file_name: fileName.replace(/\.jsonl$/i, ''),
                 avatar_url: chatContext.avatarUrl,
             });
             const raw = Array.isArray(chatData) ? chatData[0]?.chat_metadata?.[METADATA_KEY] : null;
