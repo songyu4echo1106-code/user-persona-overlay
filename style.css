@@ -148,6 +148,77 @@
     margin-top: 0.6em;
 }
 
+/* ---------------- 从其他聊天应用：选择器样式 ---------------- */
+
+#user_persona_overlay_settings .upo-chat-picker {
+    margin-top: 0.6em;
+    padding: 0.6em;
+    border: 1px solid var(--SmartThemeBorderColor, #888);
+    border-radius: 0.4em;
+}
+
+#user_persona_overlay_settings .upo-chat-picker-toolbar {
+    display: flex;
+    gap: 0.5em;
+    margin-top: 0.5em;
+}
+
+#user_persona_overlay_settings .upo-chat-picker-toolbar .text_pole {
+    flex: 1;
+}
+
+#user_persona_overlay_settings .upo-chat-picker-toolbar .menu_button {
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
+#user_persona_overlay_settings .upo-chat-picker-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4em;
+    margin-top: 0.4em;
+    max-height: 260px;
+    overflow-y: auto;
+}
+
+#user_persona_overlay_settings .upo-chat-item-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5em;
+    padding: 0.35em 0.6em;
+    border: 1px solid var(--SmartThemeBorderColor, #888);
+    border-radius: 0.4em;
+}
+
+#user_persona_overlay_settings .upo-chat-item-text {
+    min-width: 0;
+}
+
+#user_persona_overlay_settings .upo-chat-item-name {
+    font-weight: 600;
+    word-break: break-all;
+}
+
+#user_persona_overlay_settings .upo-chat-item-name small {
+    font-weight: 400;
+    opacity: 0.7;
+}
+
+#user_persona_overlay_settings .upo-chat-item-nickname {
+    font-size: 0.9em;
+    opacity: 0.85;
+    word-break: break-all;
+}
+
+#user_persona_overlay_settings .upo-chat-item-preview {
+    font-size: 0.85em;
+    opacity: 0.7;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 /* ---------------- 悬浮窗样式（挂载在 body 下，独立于设置面板作用域；固定配色，不随 ST 主题变化） ---------------- */
 
 #upo_floating_root {

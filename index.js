@@ -11,6 +11,7 @@ import {
     setExtensionPrompt,
     extension_prompt_types,
     extension_prompt_roles,
+    getRequestHeaders,
 } from '../../../../script.js';
 
 const TEMPLATE_NAMESPACE = 'third-party/user-persona-overlay';
@@ -64,6 +65,7 @@ let textFieldsSaver = null;
 let lastFollowWarnSignature = '';
 let libraryEditorState = { id: null, mode: 'preview' };
 let floatingFieldsSaver = null;
+let chatPickerCache = { key: null, items: [] };
 
 function normalizePosition(value) {
     const num = Number(value);
@@ -488,6 +490,206 @@ function clearCurrentPersona() {
     notify('已清空当前聊天的补充 Persona 内容。', 'success');
 }
 
+/* ------------ 跨聊天复制：读取当前角色其他聊天的 UPO，整体覆盖复制到当前聊天（复制后相互独立） ------------ */
+
+/**
+ * 取当前角色单人聊天上下文；群聊、未加载聊天或信息缺失时返回 null。
+ * cacheKey 用于会话内缓存：同一角色同一当前聊天只需拉取一次列表。
+ */
+function getCharacterChatContext() {
+    try {
+        const context = getContext();
+        if (!context || context.groupId) {
+            return null;
+        }
+        const character = context.characters?.[context.characterId];
+        const avatarUrl = character?.avatar ?? '';
+        const charName = context.name2 || character?.name || '';
+        const currentChatId = String(context.getCurrentChatId?.() ?? context.chatId ?? '');
+        if (!avatarUrl || !charName || !currentChatId) {
+            return null;
+        }
+        return {
+            avatarUrl,
+            charName,
+            currentChatId,
+            cacheKey: `${avatarUrl}::${currentChatId}`,
+        };
+    } catch (error) {
+        console.warn(LOG_PREFIX, '读取当前角色上下文失败。', error);
+        return null;
+    }
+}
+
+async function postJson(url, body) {
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: getRequestHeaders(),
+        body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+        throw new Error(`${url} 请求失败（HTTP ${response.status}）`);
+    }
+    return response.json();
+}
+
+/**
+ * 与 getOverlayData 相同的字段归一化，但作用于其他聊天的原始元数据；
+ * 没有 UPO 数据时返回 null，由调用方过滤。
+ */
+function normalizeSiblingOverlay(raw) {
+    if (!raw || typeof raw !== 'object') {
+        return null;
+    }
+    return {
+        version: DATA_VERSION,
+        enabled: Boolean(raw.enabled),
+        followPersona: true,
+        nickname: typeof raw.nickname === 'string' ? raw.nickname : '',
+        content: typeof raw.content === 'string' ? raw.content : '',
+        position: normalizePosition(raw.position),
+        depth: normalizeDepth(raw.depth),
+        role: normalizeRole(raw.role),
+    };
+}
+
+/**
+ * 列出当前角色其他聊天中已设置补充 Persona（content 非空）的聊天。
+ * 通过酒馆自带的 /api/characters/chats 与 /api/chats/get 只读获取，不打开也不修改任何聊天。
+ */
+async function listSiblingChatOverlays(chatContext, onProgress) {
+    const chatFiles = await postJson('/api/characters/chats', { avatar_url: chatContext.avatarUrl });
+    if (!Array.isArray(chatFiles)) {
+        return [];
+    }
+    const fileNames = chatFiles
+        .map(entry => typeof entry?.file_name === 'string' ? entry.file_name : '')
+        .filter(name => name && name.replace(/\.jsonl$/i, '') !== chatContext.currentChatId);
+    const items = [];
+    for (let index = 0; index < fileNames.length; index++) {
+        onProgress?.(index + 1, fileNames.length);
+        const fileName = fileNames[index];
+        try {
+            const chatData = await postJson('/api/chats/get', {
+                ch_name: chatContext.charName,
+                file_name: fileName,
+                avatar_url: chatContext.avatarUrl,
+            });
+            const raw = Array.isArray(chatData) ? chatData[0]?.chat_metadata?.[METADATA_KEY] : null;
+            const data = normalizeSiblingOverlay(raw);
+            if (data && data.content.trim()) {
+                items.push({ chatName: fileName.replace(/\.jsonl$/i, ''), data });
+            }
+        } catch (error) {
+            console.warn(LOG_PREFIX, `读取聊天「${fileName}」失败，已跳过。`, error);
+        }
+    }
+    return items;
+}
+
+function buildChatPreview(content, maxLength = 80) {
+    const collapsed = content.replace(/\s+/g, ' ').trim();
+    return collapsed.length > maxLength ? `${collapsed.slice(0, maxLength)}…` : collapsed;
+}
+
+function renderChatPickerItems() {
+    const listContainer = $('#upo_chat_picker_list');
+    listContainer.empty();
+    const filter = String($('#upo_chat_picker_search').val() ?? '').trim().toLowerCase();
+    const matched = chatPickerCache.items
+        .filter(item => !filter || item.chatName.toLowerCase().includes(filter));
+    if (!matched.length) {
+        if (chatPickerCache.items.length && filter) {
+            listContainer.append($('<div class="upo-hint"></div>').text('没有名称匹配的聊天。'));
+        }
+        return;
+    }
+    for (const item of matched) {
+        const name = $('<div class="upo-chat-item-name"></div>').text(item.chatName);
+        if (!item.data.enabled) {
+            name.append($('<small></small>').text(' · 原聊天中已禁用'));
+        }
+        const nickname = $('<div class="upo-chat-item-nickname"></div>')
+            .text(`备注名：${item.data.nickname.trim() || '（未设置）'}`);
+        const preview = $('<div class="upo-chat-item-preview"></div>')
+            .text(buildChatPreview(item.data.content));
+        const applyButton = $('<input type="button" class="menu_button" value="应用" />')
+            .on('click', () => applyChatOverlay(item));
+        const textColumn = $('<div class="upo-chat-item-text"></div>').append(name, nickname, preview);
+        listContainer.append($('<div class="upo-chat-item-row"></div>').append(textColumn, applyButton));
+    }
+}
+
+async function loadChatPickerList(forceRefresh = false) {
+    const status = $('#upo_chat_picker_status');
+    $('#upo_chat_picker_list').empty();
+    const chatContext = getCharacterChatContext();
+    if (!chatContext) {
+        status.text('仅角色单人聊天支持从其他聊天复制（群聊或尚未加载聊天时不可用）。');
+        return;
+    }
+    if (!forceRefresh && chatPickerCache.key === chatContext.cacheKey) {
+        status.text(chatPickerCache.items.length ? '' : '当前角色的其他聊天中没有已设置的补充 Persona。');
+        renderChatPickerItems();
+        return;
+    }
+    status.text('正在读取当前角色的聊天列表…');
+    try {
+        const items = await listSiblingChatOverlays(chatContext, (done, total) => {
+            status.text(`正在读取聊天元数据（${done}/${total}）…`);
+        });
+        chatPickerCache = { key: chatContext.cacheKey, items };
+        // 拉取期间用户可能已切换聊天：缓存按旧 key 保留，但不再触碰已属于新聊天的界面。
+        if (getCharacterChatContext()?.cacheKey !== chatContext.cacheKey) {
+            return;
+        }
+        status.text(items.length ? '' : '当前角色的其他聊天中没有已设置的补充 Persona。');
+        renderChatPickerItems();
+    } catch (error) {
+        console.warn(LOG_PREFIX, '读取其他聊天的补充 Persona 失败。', error);
+        status.text('读取失败，请点击「刷新」重试。');
+    }
+}
+
+function toggleChatPicker(force) {
+    const picker = $('#upo_chat_picker');
+    const shouldOpen = typeof force === 'boolean' ? force : picker.is(':hidden');
+    if (!shouldOpen) {
+        picker.hide();
+        return;
+    }
+    picker.show();
+    loadChatPickerList(false);
+}
+
+/**
+ * 把选中聊天的 UPO 整体覆盖复制到当前聊天（含启用状态与备注名）。
+ * 复制的是数据副本，写入当前聊天 chatMetadata 后两个聊天互不影响。
+ */
+function applyChatOverlay(item) {
+    const current = getOverlayData();
+    if (current.content.trim()
+        && !confirm(`当前聊天已有补充 Persona，应用后将被「${item.chatName}」的配置整体覆盖（含启用状态与备注名）。确定继续吗？`)) {
+        return;
+    }
+    // 与 applyLibraryPersona 同理，丢弃防抖窗口内的输入，避免随后覆盖刚复制的内容。
+    textFieldsSaver?.cancel?.();
+    floatingFieldsSaver?.cancel?.();
+    saveOverlayData({
+        enabled: item.data.enabled,
+        nickname: item.data.nickname,
+        content: item.data.content,
+        position: item.data.position,
+        depth: item.data.depth,
+        role: item.data.role,
+    });
+    toggleChatPicker(false);
+    loadOverlayIntoPanel();
+    syncFloatingPanel();
+    refreshInjection();
+    notify(`已从「${item.chatName}」复制补充 Persona 到当前聊天，两个聊天此后互不影响。`, 'success');
+}
+
 function deleteLibraryPersona(id) {
     const item = loadLibrary().find(entry => entry.id === id);
     if (!item) {
@@ -706,6 +908,10 @@ function bindPanel() {
 
     $('#upo_undo_template').on('click', undoLastPersonaTemplate);
     $('#upo_clear_persona').on('click', clearCurrentPersona);
+
+    $('#upo_from_chat').on('click', () => toggleChatPicker());
+    $('#upo_chat_picker_search').on('input', () => renderChatPickerItems());
+    $('#upo_chat_picker_refresh').on('click', () => loadChatPickerList(true));
 
     $('#upo_lib_save').on('click', saveCurrentToLibrary);
 
@@ -1049,6 +1255,8 @@ function registerEvents() {
         // 丢弃尚在防抖窗口内的旧文本，避免写进新聊天的元数据。
         textFieldsSaver?.cancel?.();
         floatingFieldsSaver?.cancel?.();
+        // 选择器列表属于旧聊天，切换后收起，避免误把旧列表应用到新聊天。
+        $('#upo_chat_picker').hide();
         loadOverlayIntoPanel();
         syncFloatingPanel();
         refreshInjection();
