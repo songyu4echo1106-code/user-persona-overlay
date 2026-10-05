@@ -580,22 +580,46 @@ function undoAppliedTemplate(id) {
 }
 
 function renderAppliedRecords() {
-    const container = $('#upo_applied_list');
-    if (!container.length) {
-        return;
-    }
-    container.empty();
+    // 设置面板与悬浮窗读取同一份记录、共用同一个 undoAppliedTemplate，两处列表一起重渲染。
     const records = getAppliedTemplates();
-    if (!records.length) {
-        container.append($('<div class="upo-applied-empty upo-hint"></div>').text('（暂无已追加的模板）'));
-        return;
+    for (const container of [$('#upo_applied_list'), $('#upo_float_applied_list')]) {
+        if (!container.length) {
+            continue;
+        }
+        container.empty();
+        if (!records.length) {
+            container.append($('<div class="upo-applied-empty upo-hint"></div>').text('（暂无已追加的模板）'));
+            continue;
+        }
+        for (const record of records) {
+            const name = $('<div class="upo-applied-item-name"></div>').text(record.name || '（未命名）');
+            const previewButton = $('<input type="button" class="menu_button" value="预览" />');
+            const undoButton = $('<input type="button" class="menu_button" value="撤销" />')
+                .on('click', () => undoAppliedTemplate(record.id));
+            const actions = $('<div class="upo-applied-item-actions"></div>').append(previewButton, undoButton);
+            // 预览只读展示该记录保存的内容快照；不读模板库，不随模板后续编辑变化。
+            const preview = $('<textarea class="text_pole upo-applied-preview" rows="4" readonly></textarea>')
+                .val(record.content)
+                .hide();
+            previewButton.on('click', () => preview.toggle());
+            container.append($('<div class="upo-applied-item"></div>').append(name, actions), preview);
+        }
     }
-    for (const record of records) {
-        const name = $('<div class="upo-applied-item-name"></div>').text(record.name || '（未命名）');
-        const undoButton = $('<input type="button" class="menu_button" value="撤销" />')
-            .on('click', () => undoAppliedTemplate(record.id));
-        const actions = $('<div class="upo-applied-item-actions"></div>').append(undoButton);
-        container.append($('<div class="upo-applied-item"></div>').append(name, actions));
+}
+
+function toggleAppliedSection() {
+    const body = $('#upo_applied_body');
+    body.toggle();
+    $('#upo_applied_toggle_icon').text(body.is(':visible') ? '▾' : '▸');
+}
+
+function toggleFloatingAppliedList() {
+    const list = $('#upo_float_applied_list');
+    if (list.is(':hidden')) {
+        renderAppliedRecords();
+        list.show();
+    } else {
+        list.hide();
     }
 }
 
@@ -1049,6 +1073,7 @@ function bindPanel() {
 
     $('#upo_undo_template').on('click', undoLastPersonaTemplate);
     $('#upo_clear_persona').on('click', clearCurrentPersona);
+    $('#upo_applied_toggle').on('click', toggleAppliedSection);
 
     $('#upo_from_chat').on('click', () => toggleChatPicker(undefined, 'settings'));
     $('#upo_chat_picker_search').on('input', () => renderChatPickerItems());
@@ -1260,6 +1285,8 @@ function createFloatingUI() {
                 <input id="upo_float_refresh" type="button" class="menu_button" value="刷新 Follow" data-i18n="刷新 Follow" />
                 <input id="upo_float_tpl_toggle" type="button" class="menu_button" value="应用模板" data-i18n="应用模板" />
                 <div id="upo_float_tpl_list" class="upo-float-tpl-list" style="display: none;"></div>
+                <input id="upo_float_applied_toggle" type="button" class="menu_button" value="已追加模板" data-i18n="已追加模板" />
+                <div id="upo_float_applied_list" class="upo-float-applied-list" style="display: none;"></div>
                 <input id="upo_float_from_chat" type="button" class="menu_button" value="从其他聊天应用" data-i18n="从其他聊天应用" />
                 <div id="upo_float_picker_slot"></div>
             </div>
@@ -1385,6 +1412,8 @@ function bindFloatingEvents() {
             list.hide();
         }
     });
+
+    $('#upo_float_applied_toggle').on('click', toggleFloatingAppliedList);
 
     $('#upo_float_from_chat').on('click', () => toggleChatPicker(undefined, 'floating'));
 }
