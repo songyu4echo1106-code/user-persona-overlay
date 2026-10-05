@@ -17,6 +17,7 @@ import {
 const TEMPLATE_NAMESPACE = 'third-party/user-persona-overlay';
 const METADATA_KEY = 'user_persona_overlay';
 const UNDO_METADATA_KEY = 'user_persona_overlay_undo';
+const APPLIED_TEMPLATES_METADATA_KEY = 'user_persona_overlay_applied_templates';
 const PROMPT_KEY = 'user_persona_overlay';
 const LIBRARY_STORAGE_KEY = 'user_persona_overlay_library';
 const LOG_PREFIX = '[User Persona Overlay]';
@@ -429,10 +430,17 @@ function applyLibraryPersona(id) {
     // 记录应用前的 content 供「撤回一步」恢复；只有成功应用模板才会产生撤回记录。
     saveUndoStack([...getUndoStack(), data.content]);
     saveOverlayData({ content });
+    // 记录本次实际追加的模板名称与 trim 后的内容快照，供「已追加模板」单条撤销使用；与撤回栈相互独立。
+    saveAppliedTemplates([...getAppliedTemplates(), {
+        id: createLibraryId(),
+        name: item.name,
+        content: templateContent,
+    }]);
     $('#upo_content').val(content);
     refreshInjection();
     updatePreview();
     syncFloatingPanel();
+    renderAppliedRecords();
     notify(`已应用 Persona 存档「${item.name}」到当前聊天。`, 'success');
 }
 
@@ -490,6 +498,105 @@ function clearCurrentPersona() {
     updatePreview();
     syncFloatingPanel();
     notify('已清空当前聊天的补充 Persona 内容。', 'success');
+}
+
+/* ------------ 已追加模板记录：追加式「应用」保存模板名称与内容快照，支持单条撤销，与撤回栈相互独立 ------------ */
+
+function getAppliedTemplates() {
+    const store = getMetadataStore();
+    const raw = store ? store[APPLIED_TEMPLATES_METADATA_KEY] : null;
+    if (!Array.isArray(raw)) {
+        return [];
+    }
+    return raw
+        .filter(entry => entry && typeof entry === 'object' && typeof entry.id === 'string' && typeof entry.content === 'string')
+        .map(entry => ({
+            id: entry.id,
+            name: typeof entry.name === 'string' ? entry.name : '',
+            content: entry.content,
+        }));
+}
+
+function saveAppliedTemplates(records) {
+    const store = getMetadataStore();
+    if (!store) {
+        console.warn(LOG_PREFIX, 'chatMetadata 不可用，已追加模板记录未保存。');
+        return;
+    }
+    store[APPLIED_TEMPLATES_METADATA_KEY] = records;
+    persistMetadata();
+}
+
+/**
+ * 从当前 Persona 内容中移除一次快照：
+ * 整体即快照则清空；在开头/末尾连同相邻的 \n\n 一起移除；在中间连同分隔符替换为单个 \n\n。
+ * 同样的文本出现多次时只移除一处；找不到对应快照时返回 null，调用方不得改动任何文本。
+ */
+function removeAppliedSnapshot(content, snapshot) {
+    if (!snapshot) {
+        return null;
+    }
+    if (content === snapshot) {
+        return '';
+    }
+    if (content.startsWith(`${snapshot}\n\n`)) {
+        return content.slice(snapshot.length + 2);
+    }
+    if (content.endsWith(`\n\n${snapshot}`)) {
+        return content.slice(0, content.length - snapshot.length - 2);
+    }
+    const middleNeedle = `\n\n${snapshot}\n\n`;
+    const middleIndex = content.indexOf(middleNeedle);
+    if (middleIndex !== -1) {
+        return `${content.slice(0, middleIndex)}\n\n${content.slice(middleIndex + middleNeedle.length)}`;
+    }
+    return null;
+}
+
+function undoAppliedTemplate(id) {
+    const records = getAppliedTemplates();
+    const record = records.find(entry => entry.id === id);
+    if (!record) {
+        notify('未找到该条已追加模板记录。', 'warning');
+        renderAppliedRecords();
+        return;
+    }
+    // 与 applyLibraryPersona 同理，丢弃防抖窗口内的输入，避免随后覆盖刚撤销的内容。
+    textFieldsSaver?.cancel?.();
+    floatingFieldsSaver?.cancel?.();
+    const content = removeAppliedSnapshot(getOverlayData().content, record.content);
+    if (content === null) {
+        notify(`未在当前 Persona 中找到模板「${record.name || '（未命名）'}」当时追加的内容，可能已被手动修改；未做任何改动，记录已保留。`, 'warning');
+        return;
+    }
+    saveAppliedTemplates(records.filter(entry => entry.id !== id));
+    saveOverlayData({ content });
+    $('#upo_content').val(content);
+    refreshInjection();
+    updatePreview();
+    syncFloatingPanel();
+    renderAppliedRecords();
+    notify(`已撤销模板「${record.name || '（未命名）'}」追加的内容。`, 'success');
+}
+
+function renderAppliedRecords() {
+    const container = $('#upo_applied_list');
+    if (!container.length) {
+        return;
+    }
+    container.empty();
+    const records = getAppliedTemplates();
+    if (!records.length) {
+        container.append($('<div class="upo-applied-empty upo-hint"></div>').text('（暂无已追加的模板）'));
+        return;
+    }
+    for (const record of records) {
+        const name = $('<div class="upo-applied-item-name"></div>').text(record.name || '（未命名）');
+        const undoButton = $('<input type="button" class="menu_button" value="撤销" />')
+            .on('click', () => undoAppliedTemplate(record.id));
+        const actions = $('<div class="upo-applied-item-actions"></div>').append(undoButton);
+        container.append($('<div class="upo-applied-item"></div>').append(name, actions));
+    }
 }
 
 /* ------------ 跨聊天复制：读取当前角色其他聊天的 UPO，整体覆盖复制到当前聊天（复制后相互独立） ------------ */
@@ -917,6 +1024,7 @@ function loadOverlayIntoPanel() {
     $('#upo_content').val(data.content);
     updateStatusLine();
     updatePreview();
+    renderAppliedRecords();
 }
 
 function bindPanel() {

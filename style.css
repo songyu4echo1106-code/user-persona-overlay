@@ -104,6 +104,34 @@
     flex-shrink: 0;
 }
 
+#user_persona_overlay_settings .upo-applied-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4em;
+    margin-top: 0.6em;
+}
+
+#user_persona_overlay_settings .upo-applied-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5em;
+    padding: 0.35em 0.6em;
+    border: 1px solid var(--SmartThemeBorderColor, #888);
+    border-radius: 0.4em;
+}
+
+#user_persona_overlay_settings .upo-applied-item-name {
+    font-weight: 600;
+    word-break: break-all;
+}
+
+#user_persona_overlay_settings .upo-applied-item-actions {
+    display: flex;
+    gap: 0.4em;
+    flex-shrink: 0;
+}
+
 #user_persona_overlay_settings .upo-follow-row {
     display: flex;
     align-items: center;
