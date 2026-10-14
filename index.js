@@ -24,6 +24,7 @@ const LOG_PREFIX = '[User Persona Overlay]';
 const EXTENSION_SETTINGS_KEY = 'user_persona_overlay';
 const FLOATING_ICON_URL = 'scripts/extensions/third-party/user-persona-overlay/assets/kirimi.png';
 const FLOATING_DRAG_THRESHOLD_PX = 8;
+const CUSTOM_ICON_MAX_PX = 256;
 const FLOATING_SIZES = Object.freeze({
     small: 44,
     medium: 56,
@@ -34,6 +35,7 @@ const DEFAULT_FLOATING_SETTINGS = Object.freeze({
     floatingIcon: 'kirimi',
     floatingSize: 'medium',
     floatingTheme: 'light',
+    floatingCustomIcon: '', // 自定义悬浮图标：dataURL 或远程 URL，居中裁切为方形后圆形显示
     floatingPosition: null, // { x, y } 为占视口宽高的比例，渲染时再换算并夹取，避免视口变化后跑出屏幕
 });
 const DATA_VERSION = 1;
@@ -69,6 +71,9 @@ let floatingFieldsSaver = null;
 let chatPickerCache = { key: null, items: [] };
 let chatPickerHost = 'settings';
 const expandedChatPickerItems = new Set();
+let charPickerHost = 'settings';
+let charPickerState = { characters: null, selectedAvatar: '', chats: {} };
+const expandedCharPickerItems = new Set();
 
 function normalizePosition(value) {
     const num = Number(value);
@@ -623,7 +628,7 @@ function toggleFloatingAppliedList() {
     }
 }
 
-/* ------------ 跨聊天复制：读取当前角色其他聊天的 UPO，整体覆盖复制到当前聊天（复制后相互独立） ------------ */
+/* ------------ 跨聊天复制：读取当前角色其她聊天的 UPO，整体覆盖复制到当前聊天（复制后相互独立） ------------ */
 
 /**
  * 取当前角色单人聊天上下文；群聊、未加载聊天或信息缺失时返回 null。
@@ -667,7 +672,7 @@ async function postJson(url, body) {
 }
 
 /**
- * 与 getOverlayData 相同的字段归一化，但作用于其他聊天的原始元数据；
+ * 与 getOverlayData 相同的字段归一化，但作用于其她聊天的原始元数据；
  * 没有 UPO 数据时返回 null，由调用方过滤。
  */
 function normalizeSiblingOverlay(raw) {
@@ -687,7 +692,7 @@ function normalizeSiblingOverlay(raw) {
 }
 
 /**
- * 列出当前角色其他聊天中已设置补充 Persona（content 非空）的聊天。
+ * 列出当前角色其她聊天中已设置补充 Persona（content 非空）的聊天。
  * 通过酒馆自带的 /api/characters/chats 与 /api/chats/get 只读获取，不打开也不修改任何聊天。
  */
 async function listSiblingChatOverlays(chatContext, onProgress) {
@@ -772,7 +777,7 @@ async function loadChatPickerList(forceRefresh = false) {
     $('#upo_chat_picker_list').empty();
     const chatContext = getCharacterChatContext();
     if (!chatContext) {
-        status.text('仅角色单人聊天支持从其他聊天复制（群聊或尚未加载聊天时不可用）。');
+        status.text('仅角色单人聊天支持从其她聊天复制（群聊或尚未加载聊天时不可用）。');
         return;
     }
     // 换聊天或手动刷新后，之前的展开状态已失效，一并收起。
@@ -780,7 +785,7 @@ async function loadChatPickerList(forceRefresh = false) {
         expandedChatPickerItems.clear();
     }
     if (!forceRefresh && chatPickerCache.key === chatContext.cacheKey) {
-        status.text(chatPickerCache.items.length ? '' : '当前角色的其他聊天中没有已设置的补充 Persona。');
+        status.text(chatPickerCache.items.length ? '' : '当前角色的其她聊天中没有已设置的补充 Persona。');
         renderChatPickerItems();
         return;
     }
@@ -794,10 +799,10 @@ async function loadChatPickerList(forceRefresh = false) {
         if (getCharacterChatContext()?.cacheKey !== chatContext.cacheKey) {
             return;
         }
-        status.text(items.length ? '' : '当前角色的其他聊天中没有已设置的补充 Persona。');
+        status.text(items.length ? '' : '当前角色的其她聊天中没有已设置的补充 Persona。');
         renderChatPickerItems();
     } catch (error) {
-        console.warn(LOG_PREFIX, '读取其他聊天的补充 Persona 失败。', error);
+        console.warn(LOG_PREFIX, '读取其她聊天的补充 Persona 失败。', error);
         status.text('读取失败，请点击「刷新」重试。');
     }
 }
@@ -854,6 +859,258 @@ function applyChatOverlay(item) {
     notify(`已从「${item.chatName}」复制补充 Persona 到当前聊天，两个聊天此后互不影响。`, 'success');
 }
 
+/* ------------ 从其她角色中应用：跨角色只读拉取，整体覆盖复制到当前聊天 ------------ */
+
+function getCurrentCharacterAvatar() {
+    try {
+        const context = getContext();
+        if (context?.groupId) {
+            return '';
+        }
+        return context?.characters?.[context?.characterId]?.avatar ?? '';
+    } catch (error) {
+        console.warn(LOG_PREFIX, '读取当前角色头像标识失败。', error);
+        return '';
+    }
+}
+
+/**
+ * 列出全部角色（排除当前角色），只读使用 /api/characters/all。
+ * 会话内缓存，手动刷新时重新拉取。
+ */
+async function listOtherCharacters(forceRefresh = false) {
+    if (!forceRefresh && Array.isArray(charPickerState.characters)) {
+        return charPickerState.characters;
+    }
+    const raw = await postJson('/api/characters/all', {});
+    if (!Array.isArray(raw)) {
+        return [];
+    }
+    const currentAvatar = getCurrentCharacterAvatar();
+    const characters = raw
+        .filter(entry => entry && typeof entry === 'object' && typeof entry.avatar === 'string' && entry.avatar)
+        .map(entry => ({
+            avatar: entry.avatar,
+            name: typeof entry.name === 'string' && entry.name ? entry.name : entry.avatar.replace(/\.[^.]+$/, ''),
+        }))
+        .filter(entry => entry.avatar !== currentAvatar);
+    charPickerState.characters = characters;
+    return characters;
+}
+
+/**
+ * 列出指定角色已设置补充 Persona（content 非空）的聊天。
+ * 与 listSiblingChatOverlays 同一思路，但 ch_name 来自角色自身，不排除任何聊天。
+ * 结果按角色缓存，手动刷新时重拉。
+ */
+async function listCharacterChatOverlays(character, forceRefresh, onProgress) {
+    if (!forceRefresh && Array.isArray(charPickerState.chats[character.avatar])) {
+        return charPickerState.chats[character.avatar];
+    }
+    const chatFiles = await postJson('/api/characters/chats', { avatar_url: character.avatar });
+    if (!Array.isArray(chatFiles)) {
+        return [];
+    }
+    const fileNames = chatFiles
+        .map(entry => typeof entry?.file_name === 'string' ? entry.file_name : '')
+        .filter(name => name);
+    const items = [];
+    for (let index = 0; index < fileNames.length; index++) {
+        onProgress?.(index + 1, fileNames.length);
+        const fileName = fileNames[index];
+        try {
+            const chatData = await postJson('/api/chats/get', {
+                ch_name: character.name,
+                file_name: fileName.replace(/\.jsonl$/i, ''),
+                avatar_url: character.avatar,
+            });
+            const raw = Array.isArray(chatData) ? chatData[0]?.chat_metadata?.[METADATA_KEY] : null;
+            const data = normalizeSiblingOverlay(raw);
+            if (data && data.content.trim()) {
+                items.push({
+                    chatName: fileName.replace(/\.jsonl$/i, ''),
+                    charName: character.name,
+                    data,
+                });
+            }
+        } catch (error) {
+            console.warn(LOG_PREFIX, `读取角色「${character.name}」的聊天「${fileName}」失败，已跳过。`, error);
+        }
+    }
+    charPickerState.chats[character.avatar] = items;
+    return items;
+}
+
+function renderCharPickerItems() {
+    const listContainer = $('#upo_char_picker_list');
+    listContainer.empty();
+    const filter = String($('#upo_char_picker_search').val() ?? '').trim().toLowerCase();
+    const selected = (charPickerState.characters ?? []).find(entry => entry.avatar === charPickerState.selectedAvatar);
+
+    // 第一级：角色列表，点击进入该角色的聊天列表。
+    if (!selected) {
+        const characters = charPickerState.characters ?? [];
+        const matched = characters.filter(entry => !filter || entry.name.toLowerCase().includes(filter));
+        if (!matched.length) {
+            listContainer.append($('<div class="upo-hint"></div>').text(characters.length ? '没有名称匹配的角色。' : ''));
+            return;
+        }
+        for (const character of matched) {
+            const row = $('<div class="upo-chat-item-row"></div>');
+            const name = $('<div class="upo-chat-item-name upo-char-item"></div>')
+                .text(character.name)
+                .prepend($('<span class="upo-chat-item-caret"></span>').text('▸ '));
+            row.append($('<div class="upo-chat-item-text"></div>').append(name)
+                .on('click', () => selectCharPickerCharacter(character, false)));
+            listContainer.append(row);
+        }
+        return;
+    }
+
+    // 第二级：所选角色的聊天列表，结构与「从本角色聊天应用」一致。
+    const backRow = $('<div class="upo-chat-item-row"></div>');
+    backRow.append($('<div class="upo-chat-item-name upo-char-item"></div>')
+        .text(`‹ 返回角色列表（当前：${selected.name}）`)
+        .on('click', () => {
+            charPickerState.selectedAvatar = '';
+            renderCharPickerItems();
+        }));
+    listContainer.append(backRow);
+
+    const items = charPickerState.chats[selected.avatar] ?? [];
+    const matched = items.filter(item => !filter
+        || item.chatName.toLowerCase().includes(filter)
+        || item.data.nickname.toLowerCase().includes(filter));
+    if (!matched.length) {
+        if (items.length && filter) {
+            listContainer.append($('<div class="upo-hint"></div>').text('没有名称或备注名匹配的聊天。'));
+        }
+        return;
+    }
+    for (const item of matched) {
+        const itemKey = `${selected.avatar}::${item.chatName}`;
+        const expanded = expandedCharPickerItems.has(itemKey);
+        const name = $('<div class="upo-chat-item-name"></div>').text(item.chatName);
+        name.prepend($('<span class="upo-chat-item-caret"></span>').text(expanded ? '▾ ' : '▸ '));
+        if (!item.data.enabled) {
+            name.append($('<small></small>').text(' · 原聊天中已禁用'));
+        }
+        const nickname = $('<div class="upo-chat-item-nickname"></div>')
+            .text(`备注名：${item.data.nickname.trim() || '（未设置）'}`);
+        const contentBlock = expanded
+            ? $('<div class="upo-chat-item-full"></div>').text(item.data.content)
+            : $('<div class="upo-chat-item-preview"></div>').text(buildChatPreview(item.data.content));
+        const applyButton = $(`<input type="button" class="menu_button" value="${expanded ? '应用这个 Persona' : '应用'}" />`)
+            .on('click', () => applyCrossCharOverlay(item));
+        const textColumn = $('<div class="upo-chat-item-text"></div>')
+            .append(name, nickname, contentBlock)
+            .on('click', () => {
+                if (expandedCharPickerItems.has(itemKey)) {
+                    expandedCharPickerItems.delete(itemKey);
+                } else {
+                    expandedCharPickerItems.add(itemKey);
+                }
+                renderCharPickerItems();
+            });
+        listContainer.append($('<div class="upo-chat-item-row"></div>').append(textColumn, applyButton));
+    }
+}
+
+async function selectCharPickerCharacter(character, forceRefresh) {
+    charPickerState.selectedAvatar = character.avatar;
+    expandedCharPickerItems.clear();
+    const status = $('#upo_char_picker_status');
+    const cached = !forceRefresh && Array.isArray(charPickerState.chats[character.avatar]);
+    if (cached) {
+        status.text(charPickerState.chats[character.avatar].length ? '' : `角色「${character.name}」的聊天中没有已设置的补充 Persona。`);
+        renderCharPickerItems();
+        return;
+    }
+    $('#upo_char_picker_list').empty();
+    status.text(`正在读取角色「${character.name}」的聊天列表…`);
+    try {
+        const items = await listCharacterChatOverlays(character, forceRefresh, (done, total) => {
+            status.text(`正在读取「${character.name}」的聊天元数据（${done}/${total}）…`);
+        });
+        // 拉取期间用户可能已返回角色列表或切换聊天：仅更新缓存，界面交给当前状态重绘。
+        status.text(items.length ? '' : `角色「${character.name}」的聊天中没有已设置的补充 Persona。`);
+        renderCharPickerItems();
+    } catch (error) {
+        console.warn(LOG_PREFIX, `读取角色「${character.name}」的聊天失败。`, error);
+        status.text(`读取角色「${character.name}」的聊天失败，可点击「刷新」重试。`);
+    }
+}
+
+async function loadCharPickerList(forceRefresh = false) {
+    const status = $('#upo_char_picker_status');
+    $('#upo_char_picker_list').empty();
+    if (forceRefresh) {
+        charPickerState = { characters: null, selectedAvatar: '', chats: {} };
+        expandedCharPickerItems.clear();
+    }
+    if (!forceRefresh && Array.isArray(charPickerState.characters)) {
+        status.text(charPickerState.characters.length ? '' : '没有找到其她角色。');
+        renderCharPickerItems();
+        return;
+    }
+    status.text('正在读取角色列表…');
+    try {
+        const characters = await listOtherCharacters(forceRefresh);
+        status.text(characters.length ? '' : '没有找到其她角色。');
+        renderCharPickerItems();
+    } catch (error) {
+        console.warn(LOG_PREFIX, '读取角色列表失败。', error);
+        status.text('读取角色列表失败，可点击「刷新」重试。');
+    }
+}
+
+function placeCharPicker(host) {
+    charPickerHost = host;
+    const picker = $('#upo_char_picker');
+    const slot = host === 'floating' ? '#upo_float_char_picker_slot' : '#upo_char_picker_home';
+    $(slot).append(picker);
+}
+
+function toggleCharPicker(force, host = charPickerHost) {
+    const picker = $('#upo_char_picker');
+    const shouldOpen = typeof force === 'boolean' ? force : picker.is(':hidden') || charPickerHost !== host;
+    if (!shouldOpen) {
+        expandedCharPickerItems.clear();
+        charPickerState.selectedAvatar = '';
+        picker.hide();
+        return;
+    }
+    placeCharPicker(host);
+    picker.show();
+    loadCharPickerList(false);
+}
+
+/**
+ * 把其她角色聊天的 UPO 整体覆盖复制到当前聊天（含启用状态与备注名）。
+ * 复制的是数据副本，写入当前聊天 chatMetadata 后两个聊天互不影响。
+ */
+function applyCrossCharOverlay(item) {
+    const current = getOverlayData();
+    if (current.content.trim()
+        && !confirm(`当前聊天已有补充 Persona，应用后将被「${item.charName} · ${item.chatName}」的配置整体覆盖（含启用状态与备注名）。确定继续吗？`)) {
+        return;
+    }
+    textFieldsSaver?.cancel?.();
+    floatingFieldsSaver?.cancel?.();
+    saveOverlayData({
+        enabled: item.data.enabled,
+        nickname: item.data.nickname,
+        content: item.data.content,
+        position: item.data.position,
+        depth: item.data.depth,
+        role: item.data.role,
+    });
+    toggleCharPicker(false);
+    loadOverlayIntoPanel();
+    syncFloatingPanel();
+    refreshInjection();
+    notify(`已从「${item.charName} · ${item.chatName}」复制补充 Persona 到当前聊天，两个聊天此后互不影响。`, 'success');
+}
 function deleteLibraryPersona(id) {
     const item = loadLibrary().find(entry => entry.id === id);
     if (!item) {
@@ -1079,6 +1336,20 @@ function bindPanel() {
     $('#upo_chat_picker_search').on('input', () => renderChatPickerItems());
     $('#upo_chat_picker_refresh').on('click', () => loadChatPickerList(true));
 
+    $('#upo_from_character').on('click', () => toggleCharPicker(undefined, 'settings'));
+    $('#upo_char_picker_search').on('input', () => renderCharPickerItems());
+    $('#upo_char_picker_refresh').on('click', () => {
+        if (charPickerState.selectedAvatar) {
+            const selected = (charPickerState.characters ?? []).find(entry => entry.avatar === charPickerState.selectedAvatar);
+            if (selected) {
+                delete charPickerState.chats[selected.avatar];
+                selectCharPickerCharacter(selected, true);
+                return;
+            }
+        }
+        loadCharPickerList(true);
+    });
+
     $('#upo_lib_save').on('click', saveCurrentToLibrary);
 
     $('#upo_follow_refresh').on('click', refreshFollowManually);
@@ -1097,8 +1368,18 @@ function bindPanel() {
     });
 
     $('#upo_floating_icon').on('change', function () {
-        saveExtensionSettings({ floatingIcon: this.value === 'plain' ? 'plain' : 'kirimi' });
+        const mode = ['kirimi', 'plain', 'custom'].includes(this.value) ? this.value : 'kirimi';
+        saveExtensionSettings({ floatingIcon: mode });
+        $('#upo_custom_icon_block').toggle(mode === 'custom');
         updateFloatingIconAppearance();
+    });
+
+    $('#upo_custom_icon_apply_url').on('click', applyCustomIconFromUrl);
+    $('#upo_custom_icon_upload').on('click', () => $('#upo_custom_icon_file').trigger('click'));
+    $('#upo_custom_icon_file').on('change', function () {
+        applyCustomIconFromFile(this.files?.[0]);
+        // 允许连续选择同一文件也能再次触发 change。
+        this.value = '';
     });
 
     $('#upo_floating_size').on('change', function () {
@@ -1110,6 +1391,91 @@ function bindPanel() {
 
 /* ------------ 悬浮窗层：纯 UI 壳，数据仍走 saveOverlayData 与现有 Follow 链 ------------ */
 
+/* ------------ 自定义悬浮图标：URL 或本地上传，居中裁切为方形后圆形显示 ------------ */
+
+function loadImageElement(src, crossOrigin) {
+    return new Promise((resolve, reject) => {
+        const image = new Image();
+        if (crossOrigin) {
+            image.crossOrigin = crossOrigin;
+        }
+        image.onload = () => resolve(image);
+        image.onerror = () => reject(new Error('图片加载失败'));
+        image.src = src;
+    });
+}
+
+/**
+ * 把图片居中裁切为方形并缩放到不超过 CUSTOM_ICON_MAX_PX，导出 PNG dataURL。
+ * 跨域图片若无 CORS 许可会污染画布导致导出失败，由调用方回退为原 URL 直显。
+ */
+async function cropImageToSquareDataUrl(src, crossOrigin) {
+    const image = await loadImageElement(src, crossOrigin);
+    const side = Math.min(image.naturalWidth, image.naturalHeight);
+    if (!side) {
+        throw new Error('图片尺寸无效');
+    }
+    const outputSize = Math.min(side, CUSTOM_ICON_MAX_PX);
+    const canvas = document.createElement('canvas');
+    canvas.width = outputSize;
+    canvas.height = outputSize;
+    const context2d = canvas.getContext('2d');
+    const sx = (image.naturalWidth - side) / 2;
+    const sy = (image.naturalHeight - side) / 2;
+    context2d.drawImage(image, sx, sy, side, side, 0, 0, outputSize, outputSize);
+    return canvas.toDataURL('image/png');
+}
+
+async function applyCustomIconFromUrl() {
+    const url = String($('#upo_custom_icon_url').val() ?? '').trim();
+    if (!url) {
+        notify('请先填写图片 URL。', 'warning');
+        return;
+    }
+    try {
+        // 优先按可跨域方式裁切，得到本地 dataURL，图标随设置持久保存。
+        const dataUrl = await cropImageToSquareDataUrl(url, 'anonymous');
+        saveExtensionSettings({ floatingIcon: 'custom', floatingCustomIcon: dataUrl });
+    } catch (error) {
+        // 跨域不允许读取像素时，退回原 URL 直显（CSS 圆形裁切，不持久化像素）。
+        console.warn(LOG_PREFIX, 'URL 图片无法本地裁切，已改为原图直显。', error);
+        try {
+            await loadImageElement(url);
+        } catch {
+            notify('图片加载失败，请检查 URL 是否可访问。', 'error');
+            return;
+        }
+        saveExtensionSettings({ floatingIcon: 'custom', floatingCustomIcon: url });
+    }
+    loadFloatingSettingsIntoPanel();
+    updateFloatingIconAppearance();
+    notify('已应用自定义悬浮图标。', 'success');
+}
+
+function applyCustomIconFromFile(file) {
+    if (!file) {
+        return;
+    }
+    if (!file.type.startsWith('image/')) {
+        notify('请选择图片文件。', 'warning');
+        return;
+    }
+    const reader = new FileReader();
+    reader.onload = async () => {
+        try {
+            const dataUrl = await cropImageToSquareDataUrl(String(reader.result));
+            saveExtensionSettings({ floatingIcon: 'custom', floatingCustomIcon: dataUrl });
+            loadFloatingSettingsIntoPanel();
+            updateFloatingIconAppearance();
+            notify('已应用自定义悬浮图标。', 'success');
+        } catch (error) {
+            console.warn(LOG_PREFIX, '本地图片处理失败。', error);
+            notify('本地图片处理失败，请换一张图片重试。', 'error');
+        }
+    };
+    reader.onerror = () => notify('读取文件失败，请重试。', 'error');
+    reader.readAsDataURL(file);
+}
 function getFloatingSizePx() {
     const size = getExtensionSettings().floatingSize;
     return FLOATING_SIZES[size] ?? FLOATING_SIZES.medium;
@@ -1169,13 +1535,22 @@ function updateFloatingIconAppearance() {
     const settings = getExtensionSettings();
     const size = getFloatingSizePx();
     icon.css({ width: `${size}px`, height: `${size}px` });
-    const useKirimi = settings.floatingIcon !== 'plain';
+    const useCustom = settings.floatingIcon === 'custom' && settings.floatingCustomIcon;
+    const useKirimi = !useCustom && settings.floatingIcon !== 'plain';
     icon.toggleClass('upo-float-icon-kirimi', useKirimi);
-    icon.toggleClass('upo-float-icon-plain', !useKirimi);
+    icon.toggleClass('upo-float-icon-plain', !useKirimi && !useCustom);
+    icon.toggleClass('upo-float-icon-custom', useCustom);
     const image = icon.find('img');
-    if (useKirimi && !image.length) {
-        icon.append($('<img alt="" draggable="false" />').attr('src', FLOATING_ICON_URL));
-    } else if (!useKirimi && image.length) {
+    const src = useCustom ? settings.floatingCustomIcon : (useKirimi ? FLOATING_ICON_URL : '');
+    if (src) {
+        if (image.length) {
+            if (image.attr('src') !== src) {
+                image.attr('src', src);
+            }
+        } else {
+            icon.append($('<img alt="" draggable="false" />').attr('src', src));
+        }
+    } else if (image.length) {
         image.remove();
     }
     applyIconPosition();
@@ -1287,8 +1662,10 @@ function createFloatingUI() {
                 <div id="upo_float_tpl_list" class="upo-float-tpl-list" style="display: none;"></div>
                 <input id="upo_float_applied_toggle" type="button" class="menu_button" value="已追加模板" data-i18n="已追加模板" />
                 <div id="upo_float_applied_list" class="upo-float-applied-list" style="display: none;"></div>
-                <input id="upo_float_from_chat" type="button" class="menu_button" value="从其他聊天应用" data-i18n="从其他聊天应用" />
+                <input id="upo_float_from_chat" type="button" class="menu_button" value="从本角色聊天应用" data-i18n="从本角色聊天应用" />
                 <div id="upo_float_picker_slot"></div>
+                <input id="upo_float_from_character" type="button" class="menu_button" value="从其她角色中应用" data-i18n="从其她角色中应用" />
+                <div id="upo_float_char_picker_slot"></div>
             </div>
         </div>
     `);
@@ -1306,7 +1683,9 @@ function destroyFloatingUI() {
     window.removeEventListener('resize', onFloatingViewportResize);
     // 选择器若正挂在悬浮窗内，先移回主面板插槽并收起，避免随悬浮窗一起被移除。
     placeChatPicker('settings');
+    placeCharPicker('settings');
     $('#upo_chat_picker').hide();
+    $('#upo_char_picker').hide();
     $('#upo_floating_root').remove();
 }
 
@@ -1416,13 +1795,19 @@ function bindFloatingEvents() {
     $('#upo_float_applied_toggle').on('click', toggleFloatingAppliedList);
 
     $('#upo_float_from_chat').on('click', () => toggleChatPicker(undefined, 'floating'));
+    $('#upo_float_from_character').on('click', () => toggleCharPicker(undefined, 'floating'));
 }
 
 function loadFloatingSettingsIntoPanel() {
     const settings = getExtensionSettings();
     $('#upo_floating_enabled').prop('checked', Boolean(settings.floatingEnabled));
-    $('#upo_floating_icon').val(settings.floatingIcon === 'plain' ? 'plain' : 'kirimi');
+    const iconMode = ['kirimi', 'plain', 'custom'].includes(settings.floatingIcon) ? settings.floatingIcon : 'kirimi';
+    $('#upo_floating_icon').val(iconMode);
     $('#upo_floating_size').val(FLOATING_SIZES[settings.floatingSize] ? settings.floatingSize : 'medium');
+    // 自定义控件仅在选中「自定义图片」时展开；URL 输入框只回显远程 URL，不回显冗长的 dataURL。
+    $('#upo_custom_icon_block').toggle(iconMode === 'custom');
+    const customIcon = typeof settings.floatingCustomIcon === 'string' ? settings.floatingCustomIcon : '';
+    $('#upo_custom_icon_url').val(customIcon && !customIcon.startsWith('data:') ? customIcon : '');
 }
 
 /* ---------------- 事件 ---------------- */
@@ -1434,6 +1819,8 @@ function registerEvents() {
         floatingFieldsSaver?.cancel?.();
         // 选择器列表属于旧聊天，切换后收起，避免误把旧列表应用到新聊天。
         $('#upo_chat_picker').hide();
+        $('#upo_char_picker').hide();
+        charPickerState.selectedAvatar = '';
         loadOverlayIntoPanel();
         syncFloatingPanel();
         refreshInjection();

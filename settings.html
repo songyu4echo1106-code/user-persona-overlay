@@ -15,8 +15,17 @@
             <select id="upo_floating_icon" class="text_pole">
                 <option value="kirimi">Kirimi 三文鱼（默认）</option>
                 <option value="plain">简洁白底按钮</option>
+                <option value="custom">自定义图片</option>
             </select>
-            <small class="upo-hint" data-i18n="自定义图片上传将在后续版本提供。">自定义图片上传将在后续版本提供。</small>
+            <div id="upo_custom_icon_block" style="display: none;">
+                <input id="upo_custom_icon_url" class="text_pole" type="text" maxlength="2000" placeholder="图片 URL（https://… 或 data:…）" />
+                <div class="upo-persona-actions">
+                    <input id="upo_custom_icon_apply_url" type="button" class="menu_button" value="使用 URL" data-i18n="使用 URL" />
+                    <input id="upo_custom_icon_upload" type="button" class="menu_button" value="本地上传" data-i18n="本地上传" />
+                    <input id="upo_custom_icon_file" type="file" accept="image/*" style="display: none;" />
+                </div>
+                <small class="upo-hint" data-i18n="图片会自动居中裁切为方形并以圆形显示；过大的图片会压缩到 256px 后保存。">图片会自动居中裁切为方形并以圆形显示；过大的图片会压缩到 256px 后保存。</small>
+            </div>
 
             <label class="upo-label" for="upo_floating_size" data-i18n="图标尺寸">图标尺寸</label>
             <select id="upo_floating_size" class="text_pole">
@@ -47,18 +56,31 @@
             <div class="upo-persona-actions">
                 <input id="upo_undo_template" type="button" class="menu_button" value="撤回一步" data-i18n="撤回一步" />
                 <input id="upo_clear_persona" type="button" class="menu_button" value="清空当前 Persona" data-i18n="清空当前 Persona" />
-                <input id="upo_from_chat" type="button" class="menu_button" value="从其他聊天应用" data-i18n="从其他聊天应用" />
+                <input id="upo_from_chat" type="button" class="menu_button" value="从本角色聊天应用" data-i18n="从本角色聊天应用" />
+                <input id="upo_from_character" type="button" class="menu_button" value="从其她角色中应用" data-i18n="从其她角色中应用" />
             </div>
 
             <div id="upo_chat_picker_home">
             <div id="upo_chat_picker" class="upo-chat-picker" style="display: none;">
-                <small class="upo-hint" data-i18n="仅列出当前角色其他已设置补充 Persona 的聊天；「应用」为整体覆盖复制，复制后两个聊天互不影响。">仅列出当前角色其他已设置补充 Persona 的聊天；「应用」为整体覆盖复制，复制后两个聊天互不影响。</small>
+                <small class="upo-hint" data-i18n="仅列出本角色其她已设置补充 Persona 的聊天；「应用」为整体覆盖复制，复制后两个聊天互不影响。">仅列出本角色其她已设置补充 Persona 的聊天；「应用」为整体覆盖复制，复制后两个聊天互不影响。</small>
                 <div class="upo-chat-picker-toolbar">
                     <input id="upo_chat_picker_search" class="text_pole" type="text" maxlength="100" placeholder="搜索聊天名称或备注名…" />
                     <input id="upo_chat_picker_refresh" type="button" class="menu_button" value="刷新" data-i18n="刷新" />
                 </div>
                 <small id="upo_chat_picker_status" class="upo-hint"></small>
                 <div id="upo_chat_picker_list" class="upo-chat-picker-list"></div>
+            </div>
+            </div>
+
+            <div id="upo_char_picker_home">
+            <div id="upo_char_picker" class="upo-chat-picker" style="display: none;">
+                <small class="upo-hint" data-i18n="列出其她角色的聊天中已设置的补充 Persona；「应用」为整体覆盖复制到当前聊天，复制后互不影响。">列出其她角色的聊天中已设置的补充 Persona；「应用」为整体覆盖复制到当前聊天，复制后互不影响。</small>
+                <div class="upo-chat-picker-toolbar">
+                    <input id="upo_char_picker_search" class="text_pole" type="text" maxlength="100" placeholder="搜索角色或聊天名称…" />
+                    <input id="upo_char_picker_refresh" type="button" class="menu_button" value="刷新" data-i18n="刷新" />
+                </div>
+                <small id="upo_char_picker_status" class="upo-hint"></small>
+                <div id="upo_char_picker_list" class="upo-chat-picker-list"></div>
             </div>
             </div>
 
