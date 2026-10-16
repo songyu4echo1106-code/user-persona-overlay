@@ -22,7 +22,7 @@ const PROMPT_KEY = 'user_persona_overlay';
 const LIBRARY_STORAGE_KEY = 'user_persona_overlay_library';
 const LOG_PREFIX = '[User Persona Overlay]';
 const EXTENSION_SETTINGS_KEY = 'user_persona_overlay';
-const FLOATING_ICON_URL = 'scripts/extensions/third-party/user-persona-overlay/assets/kirimi.png';
+const FLOATING_ICON_URL = new URL('assets/kirimi.png', import.meta.url).toString();
 const FLOATING_DRAG_THRESHOLD_PX = 8;
 const CUSTOM_ICON_MAX_PX = 256;
 const FLOATING_SIZES = Object.freeze({
@@ -1543,12 +1543,21 @@ function updateFloatingIconAppearance() {
     const image = icon.find('img');
     const src = useCustom ? settings.floatingCustomIcon : (useKirimi ? FLOATING_ICON_URL : '');
     if (src) {
-        if (image.length) {
-            if (image.attr('src') !== src) {
-                image.attr('src', src);
-            }
-        } else {
-            icon.append($('<img alt="" draggable="false" />').attr('src', src));
+        let target = image;
+        if (!target.length) {
+            target = $('<img alt="" draggable="false" />');
+            icon.append(target);
+        }
+        target.off('error.upo').on('error.upo', () => {
+            target.remove();
+            icon.removeClass('upo-float-icon-kirimi upo-float-icon-custom').addClass('upo-float-icon-plain');
+        });
+        if (target.attr('src') !== src) {
+            target.attr('src', src);
+        }
+        const element = target.get(0);
+        if (element && element.complete && element.naturalWidth === 0) {
+            target.trigger('error');
         }
     } else if (image.length) {
         image.remove();
@@ -1696,6 +1705,7 @@ function bindFloatingIconDrag(icon) {
     let startTop = 0;
     let activePointerId = null;
     let moved = false;
+    let suppressClick = false;
 
     icon.addEventListener('pointerdown', (event) => {
         if (activePointerId !== null) {
@@ -1703,6 +1713,7 @@ function bindFloatingIconDrag(icon) {
         }
         activePointerId = event.pointerId;
         moved = false;
+        suppressClick = false;
         startX = event.clientX;
         startY = event.clientY;
         startLeft = Number.parseFloat(icon.style.left) || 0;
@@ -1733,15 +1744,23 @@ function bindFloatingIconDrag(icon) {
         activePointerId = null;
         if (moved) {
             moved = false;
+            suppressClick = true;
             persistIconPosition();
-        } else if (event.type === 'pointerup') {
-            // 未发生位移的短按 = 点击：展开/收起悬浮窗。
-            toggleFloatingPanel();
         }
     };
 
     icon.addEventListener('pointerup', finish);
     icon.addEventListener('pointercancel', finish);
+    // Tap-to-toggle goes through click: Android WebViews (e.g. SillyDroid) may
+    // hijack the gesture and fire pointercancel instead of pointerup, while
+    // click still fires reliably for a plain tap.
+    icon.addEventListener('click', () => {
+        if (suppressClick) {
+            suppressClick = false;
+            return;
+        }
+        toggleFloatingPanel();
+    });
 }
 
 function bindFloatingEvents() {
