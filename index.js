@@ -21,7 +21,7 @@ const APPLIED_TEMPLATES_METADATA_KEY = 'user_persona_overlay_applied_templates';
 const PROMPT_KEY = 'user_persona_overlay';
 const LIBRARY_STORAGE_KEY = 'user_persona_overlay_library';
 const LOG_PREFIX = '[User Persona Overlay]';
-const EXTENSION_VERSION = '0.5.4';
+const EXTENSION_VERSION = '0.5.5';
 const EXTENSION_SETTINGS_KEY = 'user_persona_overlay';
 const FLOATING_ICON_URL = new URL('assets/kirimi.png', import.meta.url).toString();
 const FLOATING_DRAG_THRESHOLD_PX = 8;
@@ -1629,8 +1629,6 @@ function toggleFloatingPanel(force) {
     if (shouldOpen) {
         syncFloatingPanel();
         panel.show();
-        const rect = panel.get(0)?.getBoundingClientRect();
-        notify(`UPO：面板已打开 visible=${panel.is(':visible')} rect=${rect ? `${Math.round(rect.left)},${Math.round(rect.top)} ${Math.round(rect.width)}x${Math.round(rect.height)}` : 'n/a'}`);
     } else {
         // 关闭前把尚在防抖窗口内的悬浮编辑落盘，避免丢失。
         floatingFieldsSaver?.flush?.();
@@ -1768,7 +1766,6 @@ function bindFloatingIconDrag(icon) {
         }
         lastTapToggleAt = now;
         console.log(LOG_PREFIX, `floating icon tap via ${source}`);
-        notify(`UPO：收到点击（${source}）`);
         toggleFloatingPanel();
     };
     // Tap-to-toggle primarily goes through click: Android WebViews (e.g.

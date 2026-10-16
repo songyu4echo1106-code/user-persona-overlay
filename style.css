@@ -293,9 +293,17 @@
     position: fixed;
     top: 0;
     left: 0;
-    width: 0;
-    height: 0;
+    /* 必须撑满视口：部分 WebView 会把 fixed 子元素相对本节点定位，
+       宽高为 0 时面板按 bottom 计算会跑到屏幕外。 */
+    width: 100vw;
+    height: 100vh;
     z-index: 30000;
+    pointer-events: none;
+}
+
+#upo_float_icon,
+#upo_float_panel {
+    pointer-events: auto;
 }
 
 #upo_float_icon {
