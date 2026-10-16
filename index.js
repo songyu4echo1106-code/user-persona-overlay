@@ -1620,9 +1620,11 @@ function syncAllTextFields(nickname, content) {
 function toggleFloatingPanel(force) {
     const panel = $('#upo_float_panel');
     if (!panel.length) {
+        console.warn(LOG_PREFIX, 'toggleFloatingPanel: #upo_float_panel not found');
         return;
     }
     const shouldOpen = typeof force === 'boolean' ? force : panel.is(':hidden');
+    console.log(LOG_PREFIX, `toggleFloatingPanel: ${shouldOpen ? 'open' : 'close'}`);
     if (shouldOpen) {
         syncFloatingPanel();
         panel.show();
@@ -1684,6 +1686,7 @@ function createFloatingUI() {
     applyFloatingTheme();
     bindFloatingEvents();
     window.addEventListener('resize', onFloatingViewportResize);
+    console.log(LOG_PREFIX, 'floating UI created');
 }
 
 function destroyFloatingUI() {
@@ -1751,15 +1754,48 @@ function bindFloatingIconDrag(icon) {
 
     icon.addEventListener('pointerup', finish);
     icon.addEventListener('pointercancel', finish);
-    // Tap-to-toggle goes through click: Android WebViews (e.g. SillyDroid) may
-    // hijack the gesture and fire pointercancel instead of pointerup, while
-    // click still fires reliably for a plain tap.
+    let lastTapToggleAt = 0;
+    const toggleFromTap = (source) => {
+        const now = Date.now();
+        // click and touchend can both fire for one tap; collapse duplicates.
+        if (now - lastTapToggleAt < 600) {
+            return;
+        }
+        lastTapToggleAt = now;
+        console.log(LOG_PREFIX, `floating icon tap via ${source}`);
+        toggleFloatingPanel();
+    };
+    // Tap-to-toggle primarily goes through click: Android WebViews (e.g.
+    // SillyDroid) may hijack the gesture and fire pointercancel instead of
+    // pointerup, while click still fires reliably for a plain tap.
     icon.addEventListener('click', () => {
         if (suppressClick) {
             suppressClick = false;
             return;
         }
-        toggleFloatingPanel();
+        toggleFromTap('click');
+    });
+    // Last-resort fallback for WebViews where the hijacked gesture also eats
+    // the synthesized click: a stationary touch still toggles the panel.
+    let touchStartX = 0;
+    let touchStartY = 0;
+    let touchMoved = false;
+    icon.addEventListener('touchstart', (event) => {
+        const touch = event.changedTouches[0];
+        touchStartX = touch.clientX;
+        touchStartY = touch.clientY;
+        touchMoved = false;
+    }, { passive: true });
+    icon.addEventListener('touchmove', (event) => {
+        const touch = event.changedTouches[0];
+        if (Math.hypot(touch.clientX - touchStartX, touch.clientY - touchStartY) >= FLOATING_DRAG_THRESHOLD_PX) {
+            touchMoved = true;
+        }
+    }, { passive: true });
+    icon.addEventListener('touchend', () => {
+        if (!touchMoved) {
+            toggleFromTap('touchend');
+        }
     });
 }
 
