@@ -21,6 +21,7 @@ const APPLIED_TEMPLATES_METADATA_KEY = 'user_persona_overlay_applied_templates';
 const PROMPT_KEY = 'user_persona_overlay';
 const LIBRARY_STORAGE_KEY = 'user_persona_overlay_library';
 const LOG_PREFIX = '[User Persona Overlay]';
+const EXTENSION_VERSION = '0.5.3';
 const EXTENSION_SETTINGS_KEY = 'user_persona_overlay';
 const FLOATING_ICON_URL = new URL('assets/kirimi.png', import.meta.url).toString();
 const FLOATING_DRAG_THRESHOLD_PX = 8;
@@ -1687,6 +1688,8 @@ function createFloatingUI() {
     bindFloatingEvents();
     window.addEventListener('resize', onFloatingViewportResize);
     console.log(LOG_PREFIX, 'floating UI created');
+    // 临时诊断：宿主日志看不到浏览器 console，用 toast 让用户确认新版本已生效。
+    notify(`UPO v${EXTENSION_VERSION}：悬浮窗已加载`);
 }
 
 function destroyFloatingUI() {
@@ -1913,6 +1916,7 @@ jQuery(async () => {
             return;
         }
         container.append(html);
+        $('#upo_version_badge').text(`v${EXTENSION_VERSION}`);
         bindPanel();
         renderLibrary();
         loadOverlayIntoPanel();
