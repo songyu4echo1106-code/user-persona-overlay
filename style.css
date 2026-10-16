@@ -295,7 +295,7 @@
     left: 0;
     width: 0;
     height: 0;
-    z-index: 9000;
+    z-index: 30000;
 }
 
 #upo_float_icon {
