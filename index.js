@@ -21,7 +21,7 @@ const APPLIED_TEMPLATES_METADATA_KEY = 'user_persona_overlay_applied_templates';
 const PROMPT_KEY = 'user_persona_overlay';
 const LIBRARY_STORAGE_KEY = 'user_persona_overlay_library';
 const LOG_PREFIX = '[User Persona Overlay]';
-const EXTENSION_VERSION = '0.5.5';
+const EXTENSION_VERSION = '0.5.6';
 const EXTENSION_SETTINGS_KEY = 'user_persona_overlay';
 const FLOATING_ICON_URL = new URL('assets/kirimi.png', import.meta.url).toString();
 const FLOATING_DRAG_THRESHOLD_PX = 8;
@@ -1618,6 +1618,30 @@ function syncAllTextFields(nickname, content) {
     $('#upo_content, #upo_float_content').val(content);
 }
 
+// 部分 WebView（SillyDroid）会把 fixed 面板相对根节点而非视口定位，
+// 导致面板被算到屏幕外。打开后校验一次可见区域，跑出视口就强制按视口坐标重排。
+function ensureFloatingPanelOnScreen(panel) {
+    requestAnimationFrame(() => {
+        const element = panel.get(0);
+        if (!element || panel.is(':hidden')) {
+            return;
+        }
+        const rect = element.getBoundingClientRect();
+        const offscreen = rect.bottom < 0 || rect.top > window.innerHeight
+            || rect.right < 0 || rect.left > window.innerWidth;
+        if (!offscreen) {
+            return;
+        }
+        console.warn(LOG_PREFIX, 'floating panel offscreen, forcing viewport coordinates', rect);
+        element.style.bottom = 'auto';
+        element.style.transform = 'none';
+        element.style.left = '12px';
+        element.style.right = '12px';
+        element.style.width = 'auto';
+        element.style.top = `${Math.max(8, window.innerHeight - rect.height - 88)}px`;
+    });
+}
+
 function toggleFloatingPanel(force) {
     const panel = $('#upo_float_panel');
     if (!panel.length) {
@@ -1629,6 +1653,7 @@ function toggleFloatingPanel(force) {
     if (shouldOpen) {
         syncFloatingPanel();
         panel.show();
+        ensureFloatingPanelOnScreen(panel);
     } else {
         // 关闭前把尚在防抖窗口内的悬浮编辑落盘，避免丢失。
         floatingFieldsSaver?.flush?.();
