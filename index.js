@@ -21,7 +21,7 @@ const APPLIED_TEMPLATES_METADATA_KEY = 'user_persona_overlay_applied_templates';
 const PROMPT_KEY = 'user_persona_overlay';
 const LIBRARY_STORAGE_KEY = 'user_persona_overlay_library';
 const LOG_PREFIX = '[User Persona Overlay]';
-const EXTENSION_VERSION = '0.5.6';
+const EXTENSION_VERSION = '0.6.0';
 const EXTENSION_SETTINGS_KEY = 'user_persona_overlay';
 const FLOATING_ICON_URL = new URL('assets/kirimi.png', import.meta.url).toString();
 const FLOATING_DRAG_THRESHOLD_PX = 8;
@@ -1649,7 +1649,6 @@ function toggleFloatingPanel(force) {
         return;
     }
     const shouldOpen = typeof force === 'boolean' ? force : panel.is(':hidden');
-    console.log(LOG_PREFIX, `toggleFloatingPanel: ${shouldOpen ? 'open' : 'close'}`);
     if (shouldOpen) {
         syncFloatingPanel();
         panel.show();
@@ -1713,8 +1712,6 @@ function createFloatingUI() {
     bindFloatingEvents();
     window.addEventListener('resize', onFloatingViewportResize);
     console.log(LOG_PREFIX, 'floating UI created');
-    // 临时诊断：宿主日志看不到浏览器 console，用 toast 让用户确认新版本已生效。
-    notify(`UPO v${EXTENSION_VERSION}：悬浮窗已加载`);
 }
 
 function destroyFloatingUI() {
@@ -1783,14 +1780,13 @@ function bindFloatingIconDrag(icon) {
     icon.addEventListener('pointerup', finish);
     icon.addEventListener('pointercancel', finish);
     let lastTapToggleAt = 0;
-    const toggleFromTap = (source) => {
+    const toggleFromTap = () => {
         const now = Date.now();
         // click and touchend can both fire for one tap; collapse duplicates.
         if (now - lastTapToggleAt < 600) {
             return;
         }
         lastTapToggleAt = now;
-        console.log(LOG_PREFIX, `floating icon tap via ${source}`);
         toggleFloatingPanel();
     };
     // Tap-to-toggle primarily goes through click: Android WebViews (e.g.
@@ -1801,7 +1797,7 @@ function bindFloatingIconDrag(icon) {
             suppressClick = false;
             return;
         }
-        toggleFromTap('click');
+        toggleFromTap();
     });
     // Last-resort fallback for WebViews where the hijacked gesture also eats
     // the synthesized click: a stationary touch still toggles the panel.
@@ -1822,7 +1818,7 @@ function bindFloatingIconDrag(icon) {
     }, { passive: true });
     icon.addEventListener('touchend', () => {
         if (!touchMoved) {
-            toggleFromTap('touchend');
+            toggleFromTap();
         }
     });
 }
